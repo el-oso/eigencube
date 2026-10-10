@@ -1,5 +1,17 @@
 use eigencube_perf::*;
 
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+  Vec3(a.1 * b.2 - a.2 * b.1, a.2 * b.0 - a.0 * b.2, a.0 * b.1 - a.1 * b.0)
+}
+
+fn apply_canonical_move(m: Move, cube: &Cube) -> Cube {
+  let (n, r_m) = (m.normal, m.rot_mat());
+  std::array::from_fn(|i| {
+    let (c, r) = cube[i];
+    (c, if n.dot(r * c) > 0 { r_m * r } else { r })
+  })
+}
+
 #[test]
 fn test_counts_and_group_size() {
   let tables = Tables::get();
@@ -26,13 +38,46 @@ fn test_linear_algebra_invariants() {
 }
 
 #[test]
+fn test_moves_turn_the_way_they_are_named() {
+  for &m in &MOVES {
+    for &p in &UNIT_VECTORS {
+      if p.dot(m.normal) == 0 {
+        assert_eq!(m.normal.dot(cross(p, m.rot_mat() * p)), -(m.dir as i32), "{m:?} turns the wrong way");
+      }
+    }
+  }
+}
+
+#[test]
+fn test_opposite_face_turns_the_other_way() {
+  for &m in &MOVES {
+    let Vec3(x, y, z) = m.normal;
+    assert_eq!(m.rot_mat(), Move { normal: Vec3(-x, -y, -z), dir: -m.dir }.rot_mat(), "{m:?}");
+  }
+}
+
+#[test]
+fn test_standard_notation() {
+  let clockwise = [
+    (Vec3(0, 0, 1), Vec3(1, 0, 1), Vec3(0, -1, 1)),
+    (Vec3(0, 0, -1), Vec3(1, 0, -1), Vec3(0, 1, -1)),
+    (Vec3(1, 0, 0), Vec3(1, 0, 1), Vec3(1, 1, 0)),
+    (Vec3(-1, 0, 0), Vec3(-1, 0, 1), Vec3(-1, -1, 0)),
+    (Vec3(0, 1, 0), Vec3(1, 1, 0), Vec3(0, 1, 1)),
+    (Vec3(0, -1, 0), Vec3(1, -1, 0), Vec3(0, -1, -1)),
+  ];
+  for (face, home, after) in clockwise {
+    assert_eq!(Move { normal: face, dir: 1 }.rot_mat() * home, after, "{face:?}");
+  }
+}
+
+#[test]
 fn test_fast_cube_roundtrip() {
   let c0 = SOLVED_CUBE;
   let fast_cube = FastCube::from_cube(&c0);
   assert_eq!(fast_cube, FastCube::SOLVED);
   assert_eq!(fast_cube.to_cube(), c0);
 
-  // Permuted cubelet ordering
   let mut permuted = c0;
   permuted.reverse();
   let fast_permuted = FastCube::from_cube(&permuted);
@@ -101,6 +146,19 @@ fn test_full_scramble_solve() {
     curr = curr.apply_move(m_idx);
   }
   assert!(curr.is_solved());
+}
+
+#[test]
+fn test_canonical_cube_solve_interoperability() {
+  let scrambled = shuffle(100, 42, SOLVED_CUBE);
+  let moves = solve(scrambled);
+  let mut canonical = scrambled;
+  for &m in &moves {
+    canonical = apply_canonical_move(m, &canonical);
+  }
+  for &(c, r) in &canonical {
+    assert!(is_cubelet_solved(c, r));
+  }
 }
 
 #[test]

@@ -49,12 +49,8 @@ pub struct Move {
 }
 impl Move {
   pub const fn rot_mat(self) -> Mat3 {
-    let (Vec3(x, y, _), d) = (self.normal, self.dir);
-    match (x != 0, y != 0) {
-      (true, _) => Mat3(Vec3(1, 0, 0), Vec3(0, 0, d), Vec3(0, -d, 0)),
-      (_, true) => Mat3(Vec3(0, 0, d), Vec3(0, 1, 0), Vec3(-d, 0, 0)),
-      _ => Mat3(Vec3(0, d, 0), Vec3(-d, 0, 0), Vec3(0, 0, 1)),
-    }
+    let (Vec3(x, y, z), d) = (self.normal, self.dir);
+    Mat3(Vec3(x * x, d * z, -d * y), Vec3(-d * z, y * y, d * x), Vec3(d * y, -d * x, z * z))
   }
 }
 
