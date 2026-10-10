@@ -34,6 +34,9 @@ pub fn build(b: *std.Build) void {
     });
     tests.root_module.addImport("eigencube", mod);
     const run_tests = b.addRunArtifact(tests);
+    if (b.args) |args| {
+        run_tests.addArgs(args);
+    }
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&run_tests.step);
 }

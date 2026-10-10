@@ -100,6 +100,32 @@ pub fn isCubeletPosSolved(c: Vec3, r: Mat3) bool { return (r.mulVec(c)).eql(c); 
 
 // -- Comptime Cayley Group Precomputation: L1-resident action & distance tables -
 
+fn computeDistanceTable(
+    rots: *const [24]Mat3,
+    trans: *const [12][24]u8,
+    comptime goal: fn (Vec3, Mat3) bool,
+    out_d: *[26][24]f32,
+    out_s: *[26][24]bool,
+) void {
+    const sqrt_vals = [4]f32{ 0.0, 1.0, 1.41421356, 1.7320508 };
+    for (CUBELETS, 0..) |pos, c| {
+        var dist: [24]u8 = undefined;
+        @memset(&dist, 255);
+        var q: [24]usize = undefined;
+        var q_len: usize = 0;
+        var q_head: usize = 0;
+        for (rots, 0..) |rot, r| if (goal(pos, rot)) { dist[r] = 0; q[q_len] = r; q_len += 1; };
+        while (q_head < q_len) : (q_head += 1) {
+            const curr = q[q_head];
+            for (trans) |trans_m| {
+                const nxt = trans_m[curr];
+                if (dist[nxt] == 255) { dist[nxt] = dist[curr] + 1; q[q_len] = nxt; q_len += 1; }
+            }
+        }
+        for (0..24) |r| { out_d[c][r] = sqrt_vals[dist[r]]; out_s[c][r] = (dist[r] == 0); }
+    }
+}
+
 pub const Tables = struct {
     rotations: [24]Mat3,
     transition: [12][26][24]u8,
@@ -143,30 +169,8 @@ pub const Tables = struct {
         var sqrt_dist_pos: [26][24]f32 = undefined;
         var is_pos_solved: [26][24]bool = undefined;
 
-        const computeTable = struct {
-            fn call(rots: *const [24]Mat3, trans: *const [12][24]u8, comptime goal: fn (Vec3, Mat3) bool, out_d: *[26][24]f32, out_s: *[26][24]bool) void {
-                const sqrt_vals = [4]f32{ 0.0, 1.0, 1.41421356, 1.7320508 };
-                for (CUBELETS, 0..) |pos, c| {
-                    var dist: [24]u8 = undefined;
-                    @memset(&dist, 255);
-                    var q: [24]usize = undefined;
-                    var q_len: usize = 0;
-                    var q_head: usize = 0;
-                    for (rots, 0..) |rot, r| if (goal(pos, rot)) { dist[r] = 0; q[q_len] = r; q_len += 1; };
-                    while (q_head < q_len) : (q_head += 1) {
-                        const curr = q[q_head];
-                        for (trans) |trans_m| {
-                            const nxt = trans_m[curr];
-                            if (dist[nxt] == 255) { dist[nxt] = dist[curr] + 1; q[q_len] = nxt; q_len += 1; }
-                        }
-                    }
-                    for (0..24) |r| { out_d[c][r] = sqrt_vals[dist[r]]; out_s[c][r] = (dist[r] == 0); }
-                }
-            }
-        }.call;
-
-        computeTable(&rotations, &rot_trans, isCubeletSolved, &sqrt_dist_solved, &is_solved);
-        computeTable(&rotations, &rot_trans, isCubeletPosSolved, &sqrt_dist_pos, &is_pos_solved);
+        computeDistanceTable(&rotations, &rot_trans, isCubeletSolved, &sqrt_dist_solved, &is_solved);
+        computeDistanceTable(&rotations, &rot_trans, isCubeletPosSolved, &sqrt_dist_pos, &is_pos_solved);
 
         var prune_move: [13][12]bool = undefined;
         for (&prune_move) |*row| @memset(row, false);
@@ -268,19 +272,20 @@ pub const Rng = struct {
 // -- Pruned A* Search with Stochastic Restarts --------------------------------
 
 const VisitedEntry = struct { cube: [26]u8, cost: u16, move_code: u8, occupied: bool };
-const HeapNode = struct { prio: u64, cost: u16, last_move: u8, state: FastCube };
+const HeapNode = struct { prio: f64, cost: u16, last_move: u8, state: FastCube };
 
 pub const SearchBuffers = struct {
     visited: []VisitedEntry,
     frontier: []HeapNode,
     mask: usize,
+    count: usize,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, v_cap: usize, f_cap: usize) !SearchBuffers {
         const cap = try std.math.ceilPowerOfTwo(usize, @max(v_cap, 4));
         const v = try allocator.alloc(VisitedEntry, cap);
         @memset(v, .{ .cube = [_]u8{0} ** 26, .cost = 0, .move_code = 0, .occupied = false });
-        return .{ .visited = v, .frontier = try allocator.alloc(HeapNode, f_cap), .mask = cap - 1, .allocator = allocator };
+        return .{ .visited = v, .frontier = try allocator.alloc(HeapNode, f_cap), .mask = cap - 1, .count = 0, .allocator = allocator };
     }
 
     pub fn deinit(self: *SearchBuffers) void {
@@ -290,19 +295,20 @@ pub const SearchBuffers = struct {
 
     pub fn clear(self: *SearchBuffers) void {
         @memset(self.visited, .{ .cube = [_]u8{0} ** 26, .cost = 0, .move_code = 0, .occupied = false });
+        self.count = 0;
     }
 
-    fn hash(cube: *const [26]u8) usize {
-        var h: usize = 0;
+    fn hash(cube: *const [26]u8) u64 {
+        var h: u64 = 0;
         inline for (0..3) |k| {
-            h = ((h << 5) | (h >> (@bitSizeOf(usize) - 5))) ^ @as(usize, @truncate(std.mem.readInt(u64, cube[k * 8 .. k * 8 + 8], .little)));
+            h = ((h << 5) | (h >> 59)) ^ std.mem.readInt(u64, cube[k * 8 .. k * 8 + 8], .little);
             h = h *% 0x517cc1b727220a95;
         }
-        return (((h << 5) | (h >> (@bitSizeOf(usize) - 5))) ^ @as(usize, std.mem.readInt(u16, cube[24..26], .little))) *% 0x517cc1b727220a95;
+        return (((h << 5) | (h >> 59)) ^ @as(u64, std.mem.readInt(u16, cube[24..26], .little))) *% 0x517cc1b727220a95;
     }
 
     pub fn get(self: *const SearchBuffers, cube: *const [26]u8) ?struct { cost: u16, move_code: u8 } {
-        var idx = hash(cube) & self.mask;
+        var idx: usize = @truncate(hash(cube) & self.mask);
         while (true) : (idx = (idx + 1) & self.mask) {
             const entry = &self.visited[idx];
             if (!entry.occupied) return null;
@@ -310,12 +316,33 @@ pub const SearchBuffers = struct {
         }
     }
 
-    pub fn putOrUpdate(self: *SearchBuffers, cube: *const [26]u8, cost: u16, move_code: u8) enum { inserted, updated, skipped } {
-        var idx = hash(cube) & self.mask;
+    fn grow(self: *SearchBuffers) !void {
+        const old_entries = self.visited;
+        const new_cap = old_entries.len * 2;
+        const new_entries = try self.allocator.alloc(VisitedEntry, new_cap);
+        @memset(new_entries, .{ .cube = [_]u8{0} ** 26, .cost = 0, .move_code = 0, .occupied = false });
+        const new_mask = new_cap - 1;
+
+        for (old_entries) |entry| {
+            if (!entry.occupied) continue;
+            var idx: usize = @truncate(hash(&entry.cube) & new_mask);
+            while (new_entries[idx].occupied) : (idx = (idx + 1) & new_mask) {}
+            new_entries[idx] = entry;
+        }
+
+        self.visited = new_entries;
+        self.mask = new_mask;
+        self.allocator.free(old_entries);
+    }
+
+    pub fn putOrUpdate(self: *SearchBuffers, cube: *const [26]u8, cost: u16, move_code: u8) !enum { inserted, updated, skipped } {
+        if (self.count * 2 >= self.visited.len) try self.grow();
+        var idx: usize = @truncate(hash(cube) & self.mask);
         while (true) : (idx = (idx + 1) & self.mask) {
             const entry = &self.visited[idx];
             if (!entry.occupied) {
                 entry.* = .{ .cube = cube.*, .cost = cost, .move_code = move_code, .occupied = true };
+                self.count += 1;
                 return .inserted;
             }
             if (std.mem.eql(u8, &entry.cube, cube)) {
@@ -329,8 +356,12 @@ pub const SearchBuffers = struct {
 const MinHeap = struct {
     items: []HeapNode,
     len: usize = 0,
+    allocator: std.mem.Allocator,
 
-    pub fn push(self: *MinHeap, node: HeapNode) void {
+    pub fn push(self: *MinHeap, node: HeapNode) !void {
+        if (self.len >= self.items.len) {
+            self.items = try self.allocator.realloc(self.items, self.items.len * 2);
+        }
         var i = self.len;
         self.len += 1;
         while (i > 0) {
@@ -378,13 +409,14 @@ pub fn astar(
 
     var budget = max_moves;
     var rng = Rng.init(42);
-    var frontier = MinHeap{ .items = bufs.frontier, .len = 0 };
+    var frontier = MinHeap{ .items = bufs.frontier, .len = 0, .allocator = bufs.allocator };
+    defer bufs.frontier = frontier.items;
 
     while (true) {
         bufs.clear();
         frontier.len = 0;
-        _ = bufs.putOrUpdate(&start.data, 0, 0);
-        frontier.push(.{ .prio = 0, .cost = 0, .last_move = 0, .state = start });
+        _ = try bufs.putOrUpdate(&start.data, 0, 0);
+        try frontier.push(.{ .prio = 0, .cost = 0, .last_move = 0, .state = start });
 
         var simulated: usize = 0;
         var found_goal: ?AStarResult = null;
@@ -404,10 +436,11 @@ pub fn astar(
                 const dst = node.state.applyMove(m);
                 const mv_code: u8 = @intCast(m + 1);
 
-                if (bufs.putOrUpdate(&dst.data, next_cost, mv_code) == .skipped) continue;
+                if ((try bufs.putOrUpdate(&dst.data, next_cost, mv_code)) == .skipped) continue;
 
                 if (is_goal(ctx, &dst)) {
                     var path_list = std.ArrayList(usize).init(allocator);
+                    errdefer path_list.deinit();
                     var curr = dst;
                     while (bufs.get(&curr.data)) |entry| {
                         if (entry.move_code == 0) break;
@@ -421,8 +454,8 @@ pub fn astar(
                 }
 
                 const hw = if (random_weight > 0.0) @max(0.01, rng.randomGauss(1.0, random_weight)) else 1.0;
-                const prio: u64 = @bitCast(@as(f64, @floatFromInt(next_cost)) + hw * heuristic(ctx, &dst));
-                frontier.push(.{ .prio = prio, .cost = next_cost, .last_move = mv_code, .state = dst });
+                const prio = @as(f64, @floatFromInt(next_cost)) + hw * heuristic(ctx, &dst);
+                try frontier.push(.{ .prio = prio, .cost = next_cost, .last_move = mv_code, .state = dst });
             }
             if (found_goal != null) break;
         }
@@ -472,16 +505,15 @@ fn cornerOriented(c: usize, r_init: usize, bot: usize) bool {
     return false;
 }
 
+fn findMove(n: Vec3) usize {
+    for (MOVES, 0..) |m, i| if (m.normal.eql(n) and m.dir == 1) return i;
+    unreachable;
+}
+
 pub fn solveEndgame(cube: *FastCube, moves: *std.ArrayList(usize)) !void {
-    const findM = struct {
-        fn call(n: Vec3) usize {
-            for (MOVES, 0..) |m, i| if (m.normal.eql(n) and m.dir == 1) return i;
-            unreachable;
-        }
-    }.call;
-    const left = findM(.{ .x = 0, .y = -1, .z = 0 });
-    const top = findM(.{ .x = 0, .y = 0, .z = 1 });
-    const bot = findM(.{ .x = 0, .y = 0, .z = -1 });
+    const left = findMove(.{ .x = 0, .y = -1, .z = 0 });
+    const top = findMove(.{ .x = 0, .y = 0, .z = 1 });
+    const bot = findMove(.{ .x = 0, .y = 0, .z = -1 });
     const routine = [8]usize{ left ^ 1, top ^ 1, left, top, left ^ 1, top ^ 1, left, top };
 
     for (0..4) |_| {
@@ -511,10 +543,10 @@ fn solvePhase(
     for (0..total) |i| {
         log("{s} #{d}", .{ name, i + 1 });
         const res = (try astar(allocator, bufs, c.*, i, goal, h, rw, 100_000)) orelse return error.PhaseFailed;
+        defer allocator.free(res.path);
         log("-> found solution with {d} moves", .{res.path.len});
         c.* = res.cube;
         try moves.appendSlice(res.path);
-        allocator.free(res.path);
     }
     log("--------------------------------------------------", .{});
 }
@@ -530,9 +562,10 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
     const t0 = std.time.nanoTimestamp();
     const start_sim = total_moves_simulated.load(.monotonic);
     var moves = std.ArrayList(usize).init(allocator);
+    errdefer moves.deinit();
     var c = FastCube.fromCube(&cube);
 
-    var bufs = try SearchBuffers.init(allocator, 262_144, 262_144);
+    var bufs = try SearchBuffers.init(allocator, 65_536, 65_536);
     defer bufs.deinit();
 
     const H1 = struct {

@@ -224,3 +224,38 @@ test "successive solves independent" {
         try std.testing.expect(curr.isSolved());
     }
 }
+
+test "search buffer dynamic growth" {
+    var bufs = try eigencube.SearchBuffers.init(std.testing.allocator, 4, 4);
+    defer bufs.deinit();
+
+    // Insert multiple distinct states to trigger dynamic growth
+    for (0..20) |step| {
+        var c = FastCube.SOLVED;
+        c.data[0] = @intCast(step);
+        _ = try bufs.putOrUpdate(&c.data, @intCast(step + 1), 1);
+    }
+    try std.testing.expect(bufs.visited.len >= 32);
+    try std.testing.expect(bufs.count == 20);
+}
+
+test "full scramble solve with budget restarts" {
+    // Seed 0 specifically triggers budget expansion beyond 225k simulated moves
+    const scrambled = shuffle(100, 0, SOLVED_CUBE);
+    const moves = try solve(std.testing.allocator, scrambled);
+    defer std.testing.allocator.free(moves);
+
+    var curr = FastCube.fromCube(&scrambled);
+    for (moves) |m| {
+        var m_idx: usize = 0;
+        for (MOVES, 0..) |cand, i| {
+            if (cand.normal.eql(m.normal) and cand.dir == m.dir) {
+                m_idx = i;
+                break;
+            }
+        }
+        curr = curr.applyMove(m_idx);
+    }
+    try std.testing.expect(curr.isSolved());
+}
+

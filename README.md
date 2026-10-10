@@ -216,7 +216,7 @@ eigencube/
 ├── ocaml/                  # Minimalistic OCaml port (< 400 lines)
 ├── rust_pretty/            # Minimalistic Rust port (< 400 lines, textbook math)
 ├── rust_fast/              # Ultra-high-performance Rust solver (>10M moves/sec, Cayley L1)
-├── zig/                    # Ultra-high-performance Zig port (>13M moves/sec, comptime Cayley)
+├── zig/                    # High-performance Zig port (~8M–13M moves/sec, comptime Cayley)
 ├── scripts/
 │   └── generate_logo.py    # Logo, icons & GitHub social preview generator
 ├── tests/
@@ -245,7 +245,7 @@ Each port or companion implementation lives in its own top-level directory:
 - [`ocaml/`](ocaml/): A self-contained, typed functional pearl in OCaml (< 400 lines) using immutable association lists and $SO(3, \mathbb{Z})$ linear algebra. Run solver via `opam exec -- dune exec --root ocaml eigencube -- [seed]` and tests via `opam exec -- dune test --root ocaml`.
 - [`rust_pretty/`](rust_pretty/): A self-contained, high-performance port in Rust (< 400 lines) faithfully translating the textbook discrete linear algebra and on-demand memoized heuristics. Run solver via `cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_pretty/Cargo.toml --release`.
 - [`rust_fast/`](rust_fast/): A specialized ultra-high-performance companion in Rust (< 500 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >10,000,000 moves/sec (~16x throughput speedup over `rust_pretty/`, solving scrambles in ~0.02s–0.03s). Run solver via `cargo run --manifest-path rust_fast/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_fast/Cargo.toml --release`.
-- [`zig/`](zig/): A companion high-performance port in Zig exploiting first-class compile-time execution (`comptime`) to shift the entire $SO(3, \mathbb{Z})$ Cayley group, transition tensor, distance graphs, and pruning tables into read-only binary data (`.rodata`) with zero runtime initialization cost. Employs flat 26-byte states and cache-resident search buffers to achieve >13,000,000 moves/sec (solving scrambles in ~0.02s–0.06s). Run solver via `zig build run -Doptimize=ReleaseFast -- [seed]` and tests via `zig build test -Doptimize=ReleaseFast` from within `zig/`.
+- [`zig/`](zig/): A companion high-performance port in Zig exploiting first-class compile-time execution (`comptime`) to shift the entire $SO(3, \mathbb{Z})$ Cayley group, transition tensor, distance graphs, and pruning tables into read-only binary data (`.rodata`) with zero runtime initialization cost. Employs flat 26-byte states and dynamically expandable search buffers to achieve ~8M–13M moves/sec (solving scrambles in ~0.02s–0.2s). Run solver via `zig build run -Doptimize=ReleaseFast -- [seed]` and tests via `zig build test -Doptimize=ReleaseFast` from within `zig/`.
 
 Each language port must be self-contained within its directory, faithfully preserve the discrete 3D linear algebra formulation and the $R \cdot \text{diag}(c) = \text{diag}(c)$ solved invariant, maintain zero external puzzle dependencies, and provide its own standalone test suite.
 
