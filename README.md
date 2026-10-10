@@ -141,6 +141,8 @@ python eigencube_gui.py
   - `Right Arrow`: Step forward through the solution moves (hold to fast-forward at 15×).
   - `Left Arrow`: Step backward through the solution moves (rewind).
 
+*(Looking for a web version? Check out the browser-based [3D WebGL Explorer](https://ci4o2.zapto.org/life/life-cube.html) featured in [Eigencube Offshoots](#eigencube-offshoots).)*
+
 ### 2. Command-Line Solvers
 
 Solve a scrambled cube directly from the terminal across any implementation (all accept an optional integer random seed, defaulting to `42`):
@@ -244,6 +246,14 @@ Each port or companion implementation lives in its own top-level directory:
 - [`rust_fast/`](rust_fast/): A specialized ultra-high-performance companion in Rust (< 500 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >10,000,000 moves/sec (~16x throughput speedup over `rust_pretty/`, solving scrambles in ~0.02s–0.03s). Run solver via `cargo run --manifest-path rust_fast/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_fast/Cargo.toml --release`.
 
 Each language port must be self-contained within its directory, faithfully preserve the discrete 3D linear algebra formulation and the $R \cdot \text{diag}(c) = \text{diag}(c)$ solved invariant, maintain zero external puzzle dependencies, and provide its own standalone test suite.
+
+---
+
+## Eigencube Offshoots
+
+Independent projects, external experiments, and creative adaptations built on Eigencube's linear algebra model:
+
+- **[Interactive 3D WebGL Explorer](https://ci4o2.zapto.org/life/life-cube.html)** by [@ci4ic4](https://github.com/ci4ic4) ([source in `ci4ic4/life`](https://github.com/ci4ic4/life)): A dependency-light browser port using Three.js. Renders the cube in 3D, runs the layer-by-layer A\* solver in client-side JavaScript, and lets you click any cubelet to inspect its live coordinate $c$, position $R c$, rotation matrix $R$, and sticker directions $R \cdot \mathrm{diag}(c)$ in real time.
 
 ---
 
