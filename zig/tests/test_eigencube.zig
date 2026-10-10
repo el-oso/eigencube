@@ -259,3 +259,28 @@ test "full scramble solve with budget restarts" {
     try std.testing.expect(curr.isSolved());
 }
 
+test "search buffer init allocation failure cleanup" {
+    // Fail on index 1: v succeeds, frontier fails. Verify errdefer cleans up v without leak.
+    var failing_alloc = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    try std.testing.expectError(error.OutOfMemory, eigencube.SearchBuffers.init(failing_alloc.allocator(), 16, 16));
+}
+
+test "search buffer zero capacity init" {
+    var bufs = try eigencube.SearchBuffers.init(std.testing.allocator, 0, 0);
+    defer bufs.deinit();
+    try std.testing.expect(bufs.visited.len >= 4);
+    try std.testing.expect(bufs.frontier.len >= 4);
+}
+
+test "min heap push with zero initial capacity" {
+    const empty_slice: []eigencube.HeapNode = &[_]eigencube.HeapNode{};
+    var heap = eigencube.MinHeap{ .items = empty_slice, .len = 0, .allocator = std.testing.allocator };
+    defer std.testing.allocator.free(heap.items);
+
+    try heap.push(.{ .prio = 10, .cost = 1, .last_move = 0, .state = FastCube.SOLVED });
+    try std.testing.expect(heap.len == 1);
+    try std.testing.expect(heap.items.len >= 4);
+    const popped = heap.pop();
+    try std.testing.expect(popped != null and popped.?.prio == 10);
+}
+

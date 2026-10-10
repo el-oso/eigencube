@@ -271,8 +271,8 @@ pub const Rng = struct {
 
 // -- Pruned A* Search with Stochastic Restarts --------------------------------
 
-const VisitedEntry = struct { cube: [26]u8, cost: u16, move_code: u8, occupied: bool };
-const HeapNode = struct { prio: f64, cost: u16, last_move: u8, state: FastCube };
+pub const VisitedEntry = struct { cube: [26]u8, cost: u16, move_code: u8, occupied: bool };
+pub const HeapNode = struct { prio: f64, cost: u16, last_move: u8, state: FastCube };
 
 pub const SearchBuffers = struct {
     visited: []VisitedEntry,
@@ -284,8 +284,10 @@ pub const SearchBuffers = struct {
     pub fn init(allocator: std.mem.Allocator, v_cap: usize, f_cap: usize) !SearchBuffers {
         const cap = try std.math.ceilPowerOfTwo(usize, @max(v_cap, 4));
         const v = try allocator.alloc(VisitedEntry, cap);
+        errdefer allocator.free(v);
         @memset(v, .{ .cube = [_]u8{0} ** 26, .cost = 0, .move_code = 0, .occupied = false });
-        return .{ .visited = v, .frontier = try allocator.alloc(HeapNode, f_cap), .mask = cap - 1, .count = 0, .allocator = allocator };
+        const frontier = try allocator.alloc(HeapNode, @max(f_cap, 4));
+        return .{ .visited = v, .frontier = frontier, .mask = cap - 1, .count = 0, .allocator = allocator };
     }
 
     pub fn deinit(self: *SearchBuffers) void {
@@ -353,14 +355,15 @@ pub const SearchBuffers = struct {
     }
 };
 
-const MinHeap = struct {
+pub const MinHeap = struct {
     items: []HeapNode,
     len: usize = 0,
     allocator: std.mem.Allocator,
 
     pub fn push(self: *MinHeap, node: HeapNode) !void {
         if (self.len >= self.items.len) {
-            self.items = try self.allocator.realloc(self.items, self.items.len * 2);
+            const new_cap = if (self.items.len == 0) 4 else self.items.len * 2;
+            self.items = try self.allocator.realloc(self.items, new_cap);
         }
         var i = self.len;
         self.len += 1;
