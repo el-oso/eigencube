@@ -251,7 +251,7 @@ Each language port must be self-contained within its directory, faithfully prese
 
 ## Eigencube Offshoots
 
-Eigencube has inspired brilliant community projects and creative explorations that extend the linear algebra formulation far beyond this repository:
+Eigencube has inspired brilliant community projects based on the same linear algebra model, carrying the idea far beyond this repository:
 
 - **[Interactive 3D WebGL Explorer](https://ci4o2.zapto.org/life/life-cube.html)** by [@ci4ic4](https://github.com/ci4ic4) ([source in `ci4ic4/life`](https://github.com/ci4ic4/life)): A dependency-light browser port using Three.js. Renders the cube in 3D, runs the layer-by-layer A\* solver in client-side JavaScript, and lets you click any cubelet to inspect its live coordinate $c$, position $R c$, rotation matrix $R$, and sticker directions $R \cdot \mathrm{diag}(c)$ in real time.
 
