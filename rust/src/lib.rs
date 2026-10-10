@@ -21,6 +21,12 @@ impl Vec3 {
   pub const fn dot(self, o: Vec3) -> i32 {
     (self.0 as i32 * o.0 as i32) + (self.1 as i32 * o.1 as i32) + (self.2 as i32 * o.2 as i32)
   }
+  pub const fn scale(self, s: i8) -> Self {
+    Self(self.0 * s, self.1 * s, self.2 * s)
+  }
+  pub const fn sub(self, o: Self) -> Self {
+    Self(self.0 - o.0, self.1 - o.1, self.2 - o.2)
+  }
   pub const fn is_top_edge(self) -> bool {
     self.2 == 1 && self.norm1() == 2
   }
@@ -42,6 +48,12 @@ impl Mat3 {
   pub const fn transpose(self) -> Mat3 {
     let (a, b, c) = (self.0, self.1, self.2);
     Mat3(Vec3(a.0, b.0, c.0), Vec3(a.1, b.1, c.1), Vec3(a.2, b.2, c.2))
+  }
+  pub const fn scale(self, s: i8) -> Self {
+    Self(self.0.scale(s), self.1.scale(s), self.2.scale(s))
+  }
+  pub const fn sub(self, o: Self) -> Self {
+    Self(self.0.sub(o.0), self.1.sub(o.1), self.2.sub(o.2))
   }
 }
 
@@ -73,13 +85,13 @@ impl Move {
   }
   // A quarter turn about the normal v, clockwise as seen looking at that face (dir = 1):
   // M = v vᵀ - dir [v]ₓ keeps the part along v and turns the rest by the cross product with v.
+  // https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
   pub const fn rot_mat(self) -> Mat3 {
-    let (Vec3(x, y, z), d) = (self.normal, self.dir);
-    Mat3(
-      Vec3(x * x, x * y + d * z, x * z - d * y),
-      Vec3(y * x - d * z, y * y, y * z + d * x),
-      Vec3(z * x + d * y, z * y - d * x, z * z),
-    )
+    let (v, d) = (self.normal, self.dir);
+    let Vec3(x, y, z) = v;
+    let cross = Mat3(Vec3(0, -z, y), Vec3(z, 0, -x), Vec3(-y, x, 0));
+    let outer = Mat3(v.scale(x), v.scale(y), v.scale(z));
+    outer.sub(cross.scale(d))
   }
 }
 
