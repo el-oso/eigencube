@@ -157,7 +157,7 @@ cargo run --manifest-path rust_fast/Cargo.toml --release -- [seed]
 cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]
 
 # OCaml typed functional pearl (~3–8s):
-dune exec --root ocaml eigencube -- [seed]
+opam exec -- dune exec --root ocaml eigencube -- [seed]
 ```
 
 ### 3. Programmatic Python API
@@ -239,7 +239,7 @@ eigencube/
 While [`eigencube.py`](eigencube.py) is the canonical reference implementation powering the visualizer, Eigencube welcomes self-contained ports of the core mathematical solver to other programming languages.
 
 Each port or companion implementation lives in its own top-level directory:
-- [`ocaml/`](ocaml/): A self-contained, typed functional pearl in OCaml (< 400 lines) using immutable association lists and $SO(3, \mathbb{Z})$ linear algebra. Run solver via `dune exec --root ocaml eigencube -- [seed]` and tests via `dune test --root ocaml`.
+- [`ocaml/`](ocaml/): A self-contained, typed functional pearl in OCaml (< 400 lines) using immutable association lists and $SO(3, \mathbb{Z})$ linear algebra. Run solver via `opam exec -- dune exec --root ocaml eigencube -- [seed]` and tests via `opam exec -- dune test --root ocaml`.
 - [`rust_pretty/`](rust_pretty/): A self-contained, high-performance port in Rust (< 400 lines) faithfully translating the textbook discrete linear algebra and on-demand memoized heuristics. Run solver via `cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_pretty/Cargo.toml --release`.
 - [`rust_fast/`](rust_fast/): A specialized ultra-high-performance companion in Rust (< 500 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >10,000,000 moves/sec (~16x throughput speedup over `rust_pretty/`, solving scrambles in ~0.02s–0.03s). Run solver via `cargo run --manifest-path rust_fast/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_fast/Cargo.toml --release`.
 
