@@ -8,6 +8,7 @@ use std::time::Instant;
 
 pub static TOTAL_MOVES_SIMULATED: AtomicUsize = AtomicUsize::new(0);
 
+// -- Discrete 3D Linear Algebra: SO(3, ℤ) rotations & Euclidean vectors -------
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Vec3(pub i8, pub i8, pub i8);
 impl Vec3 {
@@ -100,6 +101,7 @@ pub fn is_cubelet_pos_solved(c: Vec3, r: Mat3) -> bool {
 }
 const SQRT: [f32; 4] = [0.0, 1.0, std::f32::consts::SQRT_2, 1.732_050_8];
 
+// -- Cayley Group Precomputation: L1-resident action & distance tables --------
 pub struct Tables {
   pub rotations: [Mat3; 24],
   pub transition: [[[u8; 24]; 26]; 12],
@@ -178,6 +180,7 @@ impl Tables {
   }
 }
 
+// -- Flat 26-Byte State Representation & Heuristics ---------------------------
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FastCube(pub [u8; 26]);
 impl std::hash::Hash for FastCube {
@@ -243,6 +246,7 @@ impl Rng {
   }
 }
 
+// -- Pruned A* Search with Stochastic Restarts --------------------------------
 pub fn astar<G: Fn(&FastCube) -> bool, H: Fn(&FastCube) -> f64>(
   start: FastCube,
   is_goal: G,
@@ -295,6 +299,7 @@ pub fn astar<G: Fn(&FastCube) -> bool, H: Fn(&FastCube) -> f64>(
           return Some((dst, path));
         }
         let hw = if random_weight > 0.0 { rng.random_gauss(1.0, random_weight).max(0.01) } else { 1.0 };
+        // Non-negative IEEE-754 floats map monotonically to u64 integer bit patterns.
         frontier.push((Reverse(((next_cost as f64) + hw * heuristic(&dst)).to_bits()), next_cost, mv_code, dst));
       }
     }
@@ -306,6 +311,7 @@ pub fn astar<G: Fn(&FastCube) -> bool, H: Fn(&FastCube) -> f64>(
   }
 }
 
+// -- Canonical Reduction Phases & 3D Solver -----------------------------------
 fn top_done(t: &Tables, i: usize, c: &FastCube) -> bool {
   let cnt = |s: &[usize]| s.iter().filter(|&&j| t.is_solved[j][c.0[j] as usize]).count();
   cnt(&TOP_EDGES) >= 4.min(i + 1) && cnt(&TOP_CUBELETS) >= 9.min(i + 1) && cnt(&MID_CUBELETS) >= 17.min(i + 1)
