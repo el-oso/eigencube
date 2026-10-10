@@ -1,9 +1,6 @@
-// lib.rs - High-Performance Discrete Linear Algebra Rubik's Cube Solver (eigencube_perf)
-// Compiles SO(3, Z) transformations and distance heuristics into direct L1 lookup tables.
-
 use rustc_hash::FxHashMap;
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{hash_map::Entry, BinaryHeap};
 use std::ops::Mul;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -11,27 +8,15 @@ use std::time::Instant;
 
 pub static TOTAL_MOVES_SIMULATED: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Vec3(pub i8, pub i8, pub i8);
 impl Vec3 {
-  pub const fn norm1(self) -> i32 {
-    self.0.abs() as i32 + self.1.abs() as i32 + self.2.abs() as i32
-  }
   pub const fn dot(self, o: Vec3) -> i32 {
-    (self.0 as i32 * o.0 as i32) + (self.1 as i32 * o.1 as i32) + (self.2 as i32 * o.2 as i32)
-  }
-  pub const fn is_top_edge(self) -> bool {
-    self.2 == 1 && self.norm1() == 2
-  }
-  pub const fn is_bottom_edge(self) -> bool {
-    self.2 == -1 && self.norm1() == 2
-  }
-  pub const fn is_bottom_corner(self) -> bool {
-    self.2 == -1 && self.norm1() == 3
+    self.0 as i32 * o.0 as i32 + self.1 as i32 * o.1 as i32 + self.2 as i32 * o.2 as i32
   }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Mat3(pub Vec3, pub Vec3, pub Vec3);
 impl Mat3 {
   pub const ID: Mat3 = Mat3(Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, 1));
@@ -51,24 +36,18 @@ impl Mul<Vec3> for Mat3 {
 }
 impl Mul<Mat3> for Mat3 {
   type Output = Mat3;
-  fn mul(self, m: Mat3) -> Mat3 {
-    let t = m.transpose();
+  fn mul(self, o: Mat3) -> Mat3 {
+    let t = o.transpose();
     Mat3(self * t.0, self * t.1, self * t.2).transpose()
   }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Move {
   pub normal: Vec3,
   pub dir: i8,
 }
 impl Move {
-  pub const fn new(normal: Vec3, dir: i8) -> Self {
-    Self { normal, dir }
-  }
-  pub const fn invert(self) -> Self {
-    Self::new(self.normal, -self.dir)
-  }
   pub const fn rot_mat(self) -> Mat3 {
     let (Vec3(x, y, _), d) = (self.normal, self.dir);
     match (x != 0, y != 0) {
@@ -79,83 +58,51 @@ impl Move {
   }
 }
 
+pub type Cubelet = (Vec3, Mat3);
+pub type Cube = [Cubelet; 26];
 pub const CUBELETS: [Vec3; 26] = {
-  let mut cubelets = [Vec3(0, 0, 0); 26];
-  let mut i = 0;
+  let (mut c, mut i) = ([Vec3(0, 0, 0); 26], 0);
   while i < 26 {
-    let idx = if i < 13 { i } else { i + 1 };
-    cubelets[i] = Vec3((idx / 9) as i8 - 1, ((idx / 3) % 3) as i8 - 1, (idx % 3) as i8 - 1);
+    let j = if i < 13 { i } else { i + 1 };
+    c[i] = Vec3((j / 9) as i8 - 1, ((j / 3) % 3) as i8 - 1, (j % 3) as i8 - 1);
     i += 1;
   }
-  cubelets
+  c
 };
-
 pub const UNIT_VECTORS: [Vec3; 6] =
   [Vec3(-1, 0, 0), Vec3(0, -1, 0), Vec3(0, 0, -1), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3(1, 0, 0)];
-
 pub const MOVES: [Move; 12] = {
-  let mut moves = [Move::new(Vec3(0, 0, 0), 0); 12];
-  let mut i = 0;
+  let (mut moves, mut i) = ([Move { normal: Vec3(0, 0, 0), dir: 0 }; 12], 0);
   while i < 12 {
-    moves[i] = Move::new(UNIT_VECTORS[i / 2], if i % 2 == 0 { -1 } else { 1 });
+    moves[i] = Move { normal: UNIT_VECTORS[i / 2], dir: if i % 2 == 0 { -1 } else { 1 } };
     i += 1;
   }
   moves
 };
-
-pub type Cubelet = (Vec3, Mat3);
-pub type Cube = [Cubelet; 26];
-
 pub const SOLVED_CUBE: Cube = {
-  let mut cube = [(Vec3(0, 0, 0), Mat3::ID); 26];
-  let mut i = 0;
+  let (mut c, mut i) = ([(Vec3(0, 0, 0), Mat3::ID); 26], 0);
   while i < 26 {
-    cube[i] = (CUBELETS[i], Mat3::ID);
+    c[i] = (CUBELETS[i], Mat3::ID);
     i += 1;
   }
-  cube
+  c
 };
+
+const TOP_EDGES: [usize; 4] = [5, 11, 16, 22];
+const TOP_CUBELETS: [usize; 9] = [2, 5, 8, 11, 13, 16, 19, 22, 25];
+const MID_CUBELETS: [usize; 17] = [1, 2, 4, 5, 7, 8, 10, 11, 13, 15, 16, 18, 19, 21, 22, 24, 25];
+const MID_LAYER: [usize; 8] = [1, 4, 7, 10, 15, 18, 21, 24];
+const BOT_EDGES: [usize; 4] = [3, 9, 14, 20];
+const BOT_CORNERS: [usize; 4] = [0, 6, 17, 23];
+const NON_BOT_CORNERS: [usize; 22] = [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25];
 
 pub fn is_cubelet_solved(c: Vec3, r: Mat3) -> bool {
   (r * Mat3::diag(c)) == Mat3::diag(c)
 }
-pub fn is_cube_solved(cube: &Cube) -> bool {
-  cube.iter().all(|&(c, r)| is_cubelet_solved(c, r))
+pub fn is_cubelet_pos_solved(c: Vec3, r: Mat3) -> bool {
+  (r * c) == c
 }
-
-const fn partition<const N: usize>(cond: u8) -> [usize; N] {
-  let (mut arr, mut cnt, mut i) = ([0; N], 0, 0);
-  while i < 26 {
-    let c = CUBELETS[i];
-    let ok = match cond {
-      0 => c.2 == 1,
-      1 => c.2 == 0,
-      2 => c.2 >= 0,
-      3 => c.2 == -1,
-      4 => !c.is_bottom_corner(),
-      5 => c.is_bottom_edge(),
-      6 => c.is_bottom_corner(),
-      _ => c.is_top_edge(),
-    };
-    if ok {
-      arr[cnt] = i;
-      cnt += 1;
-    }
-    i += 1;
-  }
-  arr
-}
-
-pub const TOP_CUBELETS: [usize; 9] = partition(0);
-pub const MID_LAYER_CUBELETS: [usize; 8] = partition(1);
-pub const MID_CUBELETS: [usize; 17] = partition(2);
-pub const BOT_CUBELETS: [usize; 9] = partition(3);
-pub const NON_BOTTOM_CORNER_CUBELETS: [usize; 22] = partition(4);
-pub const BOTTOM_EDGE_CUBELETS: [usize; 4] = partition(5);
-pub const BOTTOM_CORNER_CUBELETS: [usize; 4] = partition(6);
-pub const TOP_EDGE_CUBELETS: [usize; 4] = partition(7);
-
-const SQRT_TABLE: [f64; 4] = [0.0, 1.0, std::f64::consts::SQRT_2, 1.732_050_807_568_877_2];
+const SQRT: [f32; 4] = [0.0, 1.0, std::f32::consts::SQRT_2, 1.732_050_8];
 
 pub struct Tables {
   pub rotations: [Mat3; 24],
@@ -166,81 +113,63 @@ pub struct Tables {
   pub is_pos_solved: [[bool; 24]; 26],
   pub prune_move: [[bool; 12]; 13],
 }
-
 impl Tables {
   pub fn get() -> &'static Tables {
     static INSTANCE: OnceLock<Tables> = OnceLock::new();
     INSTANCE.get_or_init(Self::init)
   }
-
-  #[allow(clippy::needless_range_loop)]
   fn init() -> Self {
-    let (mut rotations, mut count, mut i) = ([Mat3::ID; 24], 1, 0);
-    while i < count {
-      let r = rotations[i];
+    let (mut rotations, mut i) = (vec![Mat3::ID], 0);
+    while i < rotations.len() {
       for m in &MOVES {
-        let nxt = m.rot_mat() * r;
-        if !rotations[..count].contains(&nxt) {
-          rotations[count] = nxt;
-          count += 1;
+        let nxt = m.rot_mat() * rotations[i];
+        if rotations.len() < 24 && !rotations.contains(&nxt) {
+          rotations.push(nxt);
         }
       }
       i += 1;
     }
-
-    let mut transition = [[[0u8; 24]; 26]; 12];
-    let mut rot_transition = [[0u8; 24]; 12];
-    for m in 0..12 {
-      let (mv, r_prime) = (MOVES[m], MOVES[m].rot_mat());
+    let rotations: [Mat3; 24] = rotations.try_into().unwrap();
+    let (mut transition, mut rot_trans) = ([[[0u8; 24]; 26]; 12], [[0u8; 24]; 12]);
+    for (m, &mv) in MOVES.iter().enumerate() {
+      let (n, r_m) = (mv.normal, mv.rot_mat());
       for (r_idx, &r) in rotations.iter().enumerate() {
-        rot_transition[m][r_idx] = rotations.iter().position(|&x| x == r_prime * r).unwrap() as u8;
-      }
-      for (c_idx, &c) in CUBELETS.iter().enumerate() {
-        for (r_idx, &r) in rotations.iter().enumerate() {
-          let next_r = if mv.normal.dot(r * c) > 0 { r_prime * r } else { r };
-          transition[m][c_idx][r_idx] = rotations.iter().position(|&x| x == next_r).unwrap() as u8;
+        let next_r = rotations.iter().position(|&x| x == r_m * r).unwrap() as u8;
+        rot_trans[m][r_idx] = next_r;
+        for (c_idx, &c) in CUBELETS.iter().enumerate() {
+          transition[m][c_idx][r_idx] = if n.dot(r * c) > 0 { next_r } else { r_idx as u8 };
         }
       }
     }
-
-    let compute_tables = |is_goal: fn(Vec3, Mat3) -> bool| {
+    let compute_tables = |goal: fn(Vec3, Mat3) -> bool| {
       let mut dist = [[255u8; 24]; 26];
-      for (c_idx, &c) in CUBELETS.iter().enumerate() {
-        let (mut queue, mut qh, mut qt) = ([0usize; 24], 0, 0);
-        for (r_idx, &r) in rotations.iter().enumerate() {
-          if is_goal(c, r) {
-            dist[c_idx][r_idx] = 0;
-            queue[qt] = r_idx;
-            qt += 1;
+      for (c, &pos) in CUBELETS.iter().enumerate() {
+        let (mut q, mut qh) = (Vec::with_capacity(24), 0);
+        for (r, &rot) in rotations.iter().enumerate() {
+          if goal(pos, rot) {
+            dist[c][r] = 0;
+            q.push(r);
           }
         }
-        while qh < qt {
-          let curr = queue[qh];
+        while qh < q.len() {
+          let curr = q[qh];
           qh += 1;
-          for m in 0..12 {
-            let nxt_r = rot_transition[m][curr] as usize;
-            if dist[c_idx][nxt_r] == 255 {
-              dist[c_idx][nxt_r] = dist[c_idx][curr] + 1;
-              queue[qt] = nxt_r;
-              qt += 1;
+          for &n in &rot_trans {
+            let nxt = n[curr] as usize;
+            if dist[c][nxt] == 255 {
+              dist[c][nxt] = dist[c][curr] + 1;
+              q.push(nxt);
             }
           }
         }
       }
-      let (mut sqrt_dist, mut is_solved) = ([[0.0f32; 24]; 26], [[false; 24]; 26]);
-      for c_idx in 0..26 {
-        for r_idx in 0..24 {
-          let d = dist[c_idx][r_idx] as usize;
-          sqrt_dist[c_idx][r_idx] = SQRT_TABLE[d] as f32;
-          is_solved[c_idx][r_idx] = d == 0;
-        }
-      }
-      (sqrt_dist, is_solved)
+      (
+        std::array::from_fn(|c| std::array::from_fn(|r| SQRT[dist[c][r] as usize])),
+        std::array::from_fn(|c| std::array::from_fn(|r| dist[c][r] == 0)),
+      )
     };
-
     let (sqrt_dist_solved, is_solved) = compute_tables(is_cubelet_solved);
-    let (sqrt_dist_pos, is_pos_solved) = compute_tables(|c, r| (r * c) == c);
-
+    let (sqrt_dist_pos, is_pos_solved) = compute_tables(is_cubelet_pos_solved);
     let mut prune_move = [[false; 12]; 13];
     for last in 1..=12 {
       for next in 0..12 {
@@ -249,95 +178,52 @@ impl Tables {
           (p.normal == m.normal && p.dir == -m.dir) || (p.normal.dot(m.normal) == -1 && p.normal > m.normal);
       }
     }
-
     Self { rotations, transition, sqrt_dist_solved, sqrt_dist_pos, is_solved, is_pos_solved, prune_move }
   }
 }
 
-// Compact 26-byte cube state: each byte is an index in 0..24 representing the cubelet's SO(3, Z) rotation
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FastCube(pub [u8; 26]);
-
 impl std::hash::Hash for FastCube {
   #[inline(always)]
   fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
     state.write(&self.0);
   }
 }
-
 impl FastCube {
   pub const SOLVED: Self = Self([0; 26]);
-
   pub fn from_cube(cube: &Cube) -> Self {
     let t = Tables::get();
-    let mut arr = [0u8; 26];
-    for (i, &c) in CUBELETS.iter().enumerate() {
-      let &(_, r) =
-        if cube[i].0 == c { &cube[i] } else { cube.iter().find(|&&(c2, _)| c2 == c).expect("missing cubelet") };
-      arr[i] = t.rotations.iter().position(|&x| x == r).expect("invalid rotation") as u8;
-    }
-    Self(arr)
+    Self(std::array::from_fn(|i| {
+      let &(_, r) = cube.iter().find(|(c, _)| *c == CUBELETS[i]).unwrap();
+      t.rotations.iter().position(|&x| x == r).unwrap() as u8
+    }))
   }
-
   pub fn to_cube(&self) -> Cube {
-    let t = Tables::get();
-    let mut cube = SOLVED_CUBE;
-    for i in 0..26 {
-      cube[i] = (CUBELETS[i], t.rotations[self.0[i] as usize]);
-    }
-    cube
+    std::array::from_fn(|i| (CUBELETS[i], Tables::get().rotations[self.0[i] as usize]))
   }
-
   #[inline(always)]
   pub fn apply_move(&self, m: usize) -> Self {
-    let trans = &Tables::get().transition[m];
-    let mut next = [0u8; 26];
-    for i in 0..26 {
-      next[i] = trans[i][self.0[i] as usize];
-    }
-    Self(next)
+    Self(std::array::from_fn(|i| Tables::get().transition[m][i][self.0[i] as usize]))
   }
-
+  #[inline(always)]
+  pub fn step(&mut self, m: usize) -> usize {
+    *self = self.apply_move(m);
+    m
+  }
   #[inline(always)]
   pub fn is_solved(&self) -> bool {
-    let t = Tables::get();
-    (0..26).all(|i| t.is_solved[i][self.0[i] as usize])
+    (0..26).all(|i| Tables::get().is_solved[i][self.0[i] as usize])
   }
-}
-
-#[inline(always)]
-fn layer_heuristic(c: &FastCube, indices: &[usize], table: &[[f32; 24]; 26], divisor: f32) -> f64 {
-  let sum: f32 = indices.iter().map(|&i| table[i][c.0[i] as usize]).sum();
-  ((sum * sum) / divisor) as f64
-}
-
-#[inline(always)]
-pub fn top_layer_heuristic(t: &Tables, c: &FastCube) -> f64 {
-  layer_heuristic(c, &TOP_CUBELETS, &t.sqrt_dist_solved, 8.0)
-}
-#[inline(always)]
-pub fn middle_layer_heuristic(t: &Tables, c: &FastCube) -> f64 {
-  layer_heuristic(c, &MID_CUBELETS, &t.sqrt_dist_solved, 4.0)
-}
-#[inline(always)]
-pub fn bottom_layer_edge_heuristic(t: &Tables, c: &FastCube) -> f64 {
-  layer_heuristic(c, &NON_BOTTOM_CORNER_CUBELETS, &t.sqrt_dist_solved, 3.0)
-}
-#[inline(always)]
-pub fn bottom_layer_corner_heuristic(t: &Tables, c: &FastCube) -> f64 {
-  let s_top: f32 = TOP_CUBELETS.iter().map(|&i| t.sqrt_dist_solved[i][c.0[i] as usize]).sum();
-  let s_mid: f32 = MID_LAYER_CUBELETS.iter().map(|&i| t.sqrt_dist_solved[i][c.0[i] as usize]).sum();
-  let s_bot: f32 = BOT_CUBELETS
-    .iter()
-    .map(|&i| {
-      if CUBELETS[i].is_bottom_corner() {
-        t.sqrt_dist_pos[i][c.0[i] as usize]
-      } else {
-        t.sqrt_dist_solved[i][c.0[i] as usize]
-      }
-    })
-    .sum();
-  ((s_top * s_top) / 5.0 + (s_mid * s_mid) / 3.0 + (s_bot * s_bot) / 8.0) as f64
+  #[inline(always)]
+  pub fn sum_dist(&self, idx: &[usize], dist: &[[f32; 24]; 26]) -> f32 {
+    idx.iter().map(|&i| dist[i][self.0[i] as usize]).sum()
+  }
+  #[inline(always)]
+  pub fn layer_h(&self, idx: &[usize], dist: &[[f32; 24]; 26], div: f32) -> f64 {
+    let s = self.sum_dist(idx, dist);
+    ((s * s) / div) as f64
+  }
 }
 
 pub fn log(msg: &str) {
@@ -361,11 +247,10 @@ impl Rng {
   }
 }
 
-// Fast A* Search with Flat 26-byte states, L1 lookup tables, and single-pass hash lookups
-pub fn astar(
+pub fn astar<G: Fn(&FastCube) -> bool, H: Fn(&FastCube) -> f64>(
   start: FastCube,
-  is_goal: impl Fn(&FastCube) -> bool,
-  heuristic: impl Fn(&FastCube) -> f64,
+  is_goal: G,
+  heuristic: H,
   random_weight: f64,
   max_moves: usize,
 ) -> Option<(FastCube, Vec<usize>)> {
@@ -375,12 +260,10 @@ pub fn astar(
   let t = Tables::get();
   let (mut visited, mut rng, mut budget) =
     (FxHashMap::with_capacity_and_hasher(65536, Default::default()), Rng::new(42), max_moves);
-
   loop {
     visited.clear();
     visited.insert(start, (0u16, 0u8));
     let (mut frontier, mut simulated) = (BinaryHeap::from([(Reverse(0u64), 0u16, 0u8, start)]), 0);
-
     while simulated < budget {
       let Some((_, cost, last_move, state)) = frontier.pop() else { break };
       if cost > visited[&state].0 {
@@ -397,40 +280,28 @@ pub fn astar(
         simulated += 1;
         let (next_cost, dst) = (cost + 1, state.apply_move(m));
         let mv_code = (m + 1) as u8;
-
         match visited.entry(dst) {
-          std::collections::hash_map::Entry::Occupied(mut e) => {
-            if e.get().0 <= next_cost {
-              continue;
-            }
+          Entry::Occupied(mut e) if e.get().0 > next_cost => {
             e.insert((next_cost, mv_code));
           }
-          std::collections::hash_map::Entry::Vacant(e) => {
+          Entry::Vacant(e) => {
             e.insert((next_cost, mv_code));
           }
+          _ => continue,
         }
-
         if is_goal(&dst) {
           let (mut path, mut curr) = (Vec::new(), dst);
-          while let Some(&(_, code)) = visited.get(&curr) {
-            if code == 0 {
-              break;
-            }
-            let m_idx = (code - 1) as usize;
-            path.push(m_idx);
-            curr = curr.apply_move(m_idx ^ 1);
+          while let Some(&(_, code @ 1..)) = visited.get(&curr) {
+            path.push((code - 1) as usize);
+            curr = curr.apply_move((code - 1) as usize ^ 1);
           }
           path.reverse();
           return Some((dst, path));
         }
-
         let hw = if random_weight > 0.0 { rng.random_gauss(1.0, random_weight).max(0.01) } else { 1.0 };
-        // prio >= 0.0 ensures IEEE-754 non-negative floats map monotonically to u64 integer bit patterns
-        let prio = ((next_cost as f64) + hw * heuristic(&dst)).to_bits();
-        frontier.push((Reverse(prio), next_cost, mv_code, dst));
+        frontier.push((Reverse(((next_cost as f64) + hw * heuristic(&dst)).to_bits()), next_cost, mv_code, dst));
       }
     }
-
     if simulated < budget || random_weight <= 0.0 {
       return None;
     }
@@ -440,120 +311,87 @@ pub fn astar(
 }
 
 fn top_done(t: &Tables, i: usize, c: &FastCube) -> bool {
-  TOP_EDGE_CUBELETS.iter().filter(|&&j| t.is_solved[j][c.0[j] as usize]).count() >= 4.min(i + 1)
-    && TOP_CUBELETS.iter().filter(|&&j| t.is_solved[j][c.0[j] as usize]).count() >= 9.min(i + 1)
-    && MID_CUBELETS.iter().filter(|&&j| t.is_solved[j][c.0[j] as usize]).count() >= 17.min(i + 1)
+  let cnt = |s: &[usize]| s.iter().filter(|&&j| t.is_solved[j][c.0[j] as usize]).count();
+  cnt(&TOP_EDGES) >= 4.min(i + 1) && cnt(&TOP_CUBELETS) >= 9.min(i + 1) && cnt(&MID_CUBELETS) >= 17.min(i + 1)
 }
 fn cross_done(t: &Tables, i: usize, c: &FastCube) -> bool {
-  top_done(t, 16, c)
-    && BOTTOM_EDGE_CUBELETS
-      .iter()
-      .filter(|&&j| (t.rotations[c.0[j] as usize] * Vec3(0, 0, -1)) == Vec3(0, 0, -1))
-      .count()
-      >= 4.min(i + 1)
-    && BOTTOM_EDGE_CUBELETS.iter().filter(|&&j| t.is_solved[j][c.0[j] as usize]).count() >= 4.min(i.saturating_sub(3))
+  let cnt = |s: &[usize]| s.iter().filter(|&&j| t.is_solved[j][c.0[j] as usize]).count();
+  let d = Vec3(0, 0, -1);
+  let ok = BOT_EDGES.iter().filter(|&&j| t.rotations[c.0[j] as usize] * d == d).count();
+  top_done(t, 16, c) && ok >= 4.min(i + 1) && cnt(&BOT_EDGES) >= 4.min(i.saturating_sub(3))
 }
 fn corners_done(t: &Tables, i: usize, c: &FastCube) -> bool {
-  cross_done(t, 7, c)
-    && BOTTOM_CORNER_CUBELETS.iter().filter(|&&j| t.is_pos_solved[j][c.0[j] as usize]).count() >= 4.min(i + 1)
-}
-
-fn solve_layer(
-  name: &str,
-  total: usize,
-  is_goal: impl Fn(usize, &FastCube) -> bool,
-  heuristic: impl Fn(usize, &FastCube) -> f64,
-  random_weight: f64,
-  cube: &mut FastCube,
-  moves: &mut Vec<usize>,
-) {
-  for i in 0..total {
-    log(&format!("{} #{}", name, i + 1));
-    let (next_c, mvs) =
-      astar(*cube, |c| is_goal(i, c), |c| heuristic(i, c), random_weight, 100_000).expect("layer search failed");
-    log(&format!("-> found solution with {} moves", mvs.len()));
-    *cube = next_c;
-    moves.extend(mvs);
-  }
-  log("--------------------------------------------------");
-}
-
-fn corner_oriented(t: &Tables, c_idx: usize, mut r_idx: usize, bot: usize) -> bool {
-  (0..4).any(|_| {
-    let ok = t.is_solved[c_idx][r_idx];
-    r_idx = t.transition[bot][c_idx][r_idx] as usize;
-    ok
-  })
+  let pos = BOT_CORNERS.iter().filter(|&&j| t.is_pos_solved[j][c.0[j] as usize]).count();
+  cross_done(t, 7, c) && pos >= 4.min(i + 1)
 }
 
 pub fn solve_endgame(cube: &mut FastCube, moves: &mut Vec<usize>) {
   let t = Tables::get();
-  let left = MOVES.iter().position(|&m| m.normal == Vec3(0, -1, 0) && m.dir == 1).unwrap();
-  let top = MOVES.iter().position(|&m| m.normal == Vec3(0, 0, 1) && m.dir == 1).unwrap();
-  let bot = MOVES.iter().position(|&m| m.normal == Vec3(0, 0, -1) && m.dir == 1).unwrap();
+  let find_m = |n| MOVES.iter().position(|&m| m.normal == n && m.dir == 1).unwrap();
+  let (left, top, bot) = (find_m(Vec3(0, -1, 0)), find_m(Vec3(0, 0, 1)), find_m(Vec3(0, 0, -1)));
   let routine = [left ^ 1, top ^ 1, left, top, left ^ 1, top ^ 1, left, top];
-
+  let corner_oriented = |c: usize, mut r: usize| {
+    (0..4).any(|_| {
+      let ok = t.is_solved[c][r];
+      r = t.transition[bot][c][r] as usize;
+      ok
+    })
+  };
   for _ in 0..4 {
     while !{
-      let (c_idx, r_idx) = (0..26)
-        .find_map(|i| {
-          let r = cube.0[i] as usize;
-          ((t.rotations[r] * CUBELETS[i]) == Vec3(1, -1, -1)).then_some((i, r))
-        })
-        .expect("corner not found");
-      corner_oriented(t, c_idx, r_idx, bot)
+      let c = (0..26).find(|&i| t.rotations[cube.0[i] as usize] * CUBELETS[i] == Vec3(1, -1, -1)).unwrap();
+      corner_oriented(c, cube.0[c] as usize)
     } {
-      for &m in &routine {
-        *cube = cube.apply_move(m);
-        moves.push(m);
-      }
+      moves.extend(routine.map(|m| cube.step(m)));
     }
-    *cube = cube.apply_move(bot);
-    moves.push(bot);
+    moves.push(cube.step(bot));
   }
   while !cube.is_solved() {
-    *cube = cube.apply_move(bot);
-    moves.push(bot);
+    moves.push(cube.step(bot));
   }
 }
 
 pub fn shuffle(iters: usize, seed: u64, cube: Cube) -> Cube {
   let mut rng = Rng::new(seed);
-  let mut fast_cube = FastCube::from_cube(&cube);
-  for _ in 0..iters {
-    let m = (rng.next_f64() * 12.0) as usize % 12;
-    fast_cube = fast_cube.apply_move(m);
-  }
-  fast_cube.to_cube()
+  (0..iters)
+    .fold(FastCube::from_cube(&cube), |c, _| c.apply_move((rng.next_f64() * 12.0) as usize % 12))
+    .to_cube()
 }
 
 pub fn solve(cube: Cube) -> Vec<Move> {
-  let (t0, start_sim) = (Instant::now(), TOTAL_MOVES_SIMULATED.load(Ordering::Relaxed));
-  let mut fast_cube = FastCube::from_cube(&cube);
-  let mut moves = Vec::new();
+  let (t0, start_sim, mut moves) = (Instant::now(), TOTAL_MOVES_SIMULATED.load(Ordering::Relaxed), Vec::new());
+  let mut c = FastCube::from_cube(&cube);
   let t = Tables::get();
-
-  let h1 = |i, c: &FastCube| if i < 9 { top_layer_heuristic(t, c) } else { middle_layer_heuristic(t, c) };
-  let (h_cross, h_corners) =
-    (|_, c: &FastCube| bottom_layer_edge_heuristic(t, c), |_, c: &FastCube| bottom_layer_corner_heuristic(t, c));
-
-  solve_layer("solving cubelet", 17, |i, c| top_done(t, i, c), h1, 0.25, &mut fast_cube, &mut moves);
-  solve_layer("solving bottom cross", 8, |i, c| cross_done(t, i, c), h_cross, 0.25, &mut fast_cube, &mut moves);
-  solve_layer(
-    "positioning bottom corners",
-    4,
-    |i, c| corners_done(t, i, c),
-    h_corners,
-    0.30,
-    &mut fast_cube,
-    &mut moves,
-  );
-  solve_endgame(&mut fast_cube, &mut moves);
-
+  let h1 = |i, c: &FastCube| {
+    let (s, d) = if i < 9 { (&TOP_CUBELETS[..], 8.0) } else { (&MID_CUBELETS[..], 4.0) };
+    c.layer_h(s, &t.sqrt_dist_solved, d)
+  };
+  let h_cross = |_, c: &FastCube| c.layer_h(&NON_BOT_CORNERS, &t.sqrt_dist_solved, 3.0);
+  let h_corners = |_, c: &FastCube| {
+    let (t_s, m_s) = (c.sum_dist(&TOP_CUBELETS, &t.sqrt_dist_solved), c.sum_dist(&MID_LAYER, &t.sqrt_dist_solved));
+    let b_s = c.sum_dist(&BOT_EDGES, &t.sqrt_dist_solved) + c.sum_dist(&BOT_CORNERS, &t.sqrt_dist_pos);
+    ((t_s * t_s) / 5.0 + (m_s * m_s) / 3.0 + (b_s * b_s) / 8.0) as f64
+  };
+  macro_rules! phase {
+    ($name:literal, $n:literal, $rw:literal, $goal:expr, $h:expr) => {
+      for i in 0..$n {
+        log(&format!("{} #{}", $name, i + 1));
+        let (next_c, p) = astar(c, |x| $goal(i, x), |x| $h(i, x), $rw, 100_000).expect("phase failed");
+        log(&format!("-> found solution with {} moves", p.len()));
+        c = next_c;
+        moves.extend(p);
+      }
+      log("--------------------------------------------------");
+    };
+  }
+  phase!("solving cubelet", 17, 0.25, |i, c| top_done(t, i, c), h1);
+  phase!("solving bottom cross", 8, 0.25, |i, c| cross_done(t, i, c), h_cross);
+  phase!("positioning bottom corners", 4, 0.30, |i, c| corners_done(t, i, c), h_corners);
+  solve_endgame(&mut c, &mut moves);
   let (elapsed, sim) = (t0.elapsed().as_secs_f64(), TOTAL_MOVES_SIMULATED.load(Ordering::Relaxed) - start_sim);
   log(&format!("Solved cube in {} moves.", moves.len()));
-  log(&format!("is_cube_solved: {}", fast_cube.is_solved()));
+  log(&format!("is_cube_solved: {}", c.is_solved()));
   log(&format!("- time elapsed: {:.3} sec", elapsed));
   log(&format!("- moves simulated: {} ({:.0} moves/sec)", sim, sim as f64 / elapsed.max(0.0001)));
-  moves.into_iter().map(|idx| MOVES[idx]).collect()
+  moves.into_iter().map(|i| MOVES[i]).collect()
 }
