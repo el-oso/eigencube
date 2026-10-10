@@ -12,7 +12,9 @@ pub const Vec3 = struct {
     pub fn dot(self: Vec3, o: Vec3) i32 {
         return @as(i32, self.x) * @as(i32, o.x) + @as(i32, self.y) * @as(i32, o.y) + @as(i32, self.z) * @as(i32, o.z);
     }
-    pub fn eql(self: Vec3, o: Vec3) bool { return self.x == o.x and self.y == o.y and self.z == o.z; }
+    pub fn eql(self: Vec3, o: Vec3) bool {
+        return self.x == o.x and self.y == o.y and self.z == o.z;
+    }
     pub fn gt(self: Vec3, o: Vec3) bool {
         if (self.x != o.x) return self.x > o.x;
         if (self.y != o.y) return self.y > o.y;
@@ -95,8 +97,12 @@ pub const BOT_EDGES = [_]usize{ 3, 9, 14, 20 };
 pub const BOT_CORNERS = [_]usize{ 0, 6, 17, 23 };
 pub const NON_BOT_CORNERS = [_]usize{ 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25 };
 
-pub fn isCubeletSolved(c: Vec3, r: Mat3) bool { return (r.mulMat(Mat3.diag(c))).eql(Mat3.diag(c)); }
-pub fn isCubeletPosSolved(c: Vec3, r: Mat3) bool { return (r.mulVec(c)).eql(c); }
+pub fn isCubeletSolved(c: Vec3, r: Mat3) bool {
+    return (r.mulMat(Mat3.diag(c))).eql(Mat3.diag(c));
+}
+pub fn isCubeletPosSolved(c: Vec3, r: Mat3) bool {
+    return (r.mulVec(c)).eql(c);
+}
 
 // -- Comptime Cayley Group Precomputation: L1-resident action & distance tables -
 
@@ -114,15 +120,26 @@ fn computeDistanceTable(
         var q: [24]usize = undefined;
         var q_len: usize = 0;
         var q_head: usize = 0;
-        for (rots, 0..) |rot, r| if (goal(pos, rot)) { dist[r] = 0; q[q_len] = r; q_len += 1; };
+        for (rots, 0..) |rot, r| if (goal(pos, rot)) {
+            dist[r] = 0;
+            q[q_len] = r;
+            q_len += 1;
+        };
         while (q_head < q_len) : (q_head += 1) {
             const curr = q[q_head];
             for (trans) |trans_m| {
                 const nxt = trans_m[curr];
-                if (dist[nxt] == 255) { dist[nxt] = dist[curr] + 1; q[q_len] = nxt; q_len += 1; }
+                if (dist[nxt] == 255) {
+                    dist[nxt] = dist[curr] + 1;
+                    q[q_len] = nxt;
+                    q_len += 1;
+                }
             }
         }
-        for (0..24) |r| { out_d[c][r] = sqrt_vals[dist[r]]; out_s[c][r] = (dist[r] == 0); }
+        for (0..24) |r| {
+            out_d[c][r] = sqrt_vals[dist[r]];
+            out_s[c][r] = (dist[r] == 0);
+        }
     }
 }
 
@@ -145,8 +162,14 @@ pub const Tables = struct {
             for (MOVES) |m| {
                 const nxt = m.rotMat().mulMat(rotations[i]);
                 var found = false;
-                for (rotations[0..rot_len]) |r| if (r.eql(nxt)) { found = true; break; };
-                if (!found and rot_len < 24) { rotations[rot_len] = nxt; rot_len += 1; }
+                for (rotations[0..rot_len]) |r| if (r.eql(nxt)) {
+                    found = true;
+                    break;
+                };
+                if (!found and rot_len < 24) {
+                    rotations[rot_len] = nxt;
+                    rot_len += 1;
+                }
             }
         }
 
@@ -158,7 +181,10 @@ pub const Tables = struct {
             for (rotations, 0..) |r, r_idx| {
                 const prod = r_m.mulMat(r);
                 var next_r: u8 = 0;
-                for (rotations, 0..) |cand, cand_idx| if (cand.eql(prod)) { next_r = @intCast(cand_idx); break; };
+                for (rotations, 0..) |cand, cand_idx| if (cand.eql(prod)) {
+                    next_r = @intCast(cand_idx);
+                    break;
+                };
                 rot_trans[m][r_idx] = next_r;
                 for (CUBELETS, 0..) |c, c_idx| transition[m][c_idx][r_idx] = if (n.dot(r.mulVec(c)) > 0) next_r else @intCast(r_idx);
             }
@@ -203,9 +229,15 @@ pub const FastCube = struct {
         var res: [26]u8 = undefined;
         for (CUBELETS, 0..) |c, i| {
             var r = Mat3.id;
-            for (cube) |cubelet| if (cubelet.pos.eql(c)) { r = cubelet.rot; break; };
+            for (cube) |cubelet| if (cubelet.pos.eql(c)) {
+                r = cubelet.rot;
+                break;
+            };
             var idx: u8 = 0;
-            for (tables.rotations, 0..) |rot, rot_idx| if (rot.eql(r)) { idx = @intCast(rot_idx); break; };
+            for (tables.rotations, 0..) |rot, rot_idx| if (rot.eql(r)) {
+                idx = @intCast(rot_idx);
+                break;
+            };
             res[i] = idx;
         }
         return .{ .data = res };
@@ -253,7 +285,9 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
 pub const Rng = struct {
     state: u64,
 
-    pub fn init(seed: u64) Rng { return .{ .state = if (seed == 0) 1 else seed }; }
+    pub fn init(seed: u64) Rng {
+        return .{ .state = if (seed == 0) 1 else seed };
+    }
 
     pub fn nextF64(self: *Rng) f64 {
         self.state ^= self.state << 13;
@@ -271,10 +305,11 @@ pub const Rng = struct {
 
 // -- Pruned A* Search with Stochastic Restarts --------------------------------
 
-pub const VisitedEntry = struct { cube: [26]u8, cost: u16, move_code: u8, occupied: bool };
+pub const VisitedEntry = struct { cube: [26]u8, cost: u16, move_code: u8 };
 pub const HeapNode = struct { prio: f64, cost: u16, last_move: u8, state: FastCube };
 
 pub const SearchBuffers = struct {
+    ctrl: []u8,
     visited: []VisitedEntry,
     frontier: []HeapNode,
     mask: usize,
@@ -283,72 +318,116 @@ pub const SearchBuffers = struct {
 
     pub fn init(allocator: std.mem.Allocator, v_cap: usize, f_cap: usize) !SearchBuffers {
         const cap = try std.math.ceilPowerOfTwo(usize, @max(v_cap, 4));
+        const ctrl = try allocator.alloc(u8, cap);
+        errdefer allocator.free(ctrl);
+        @memset(ctrl, 0);
         const v = try allocator.alloc(VisitedEntry, cap);
         errdefer allocator.free(v);
-        @memset(v, .{ .cube = [_]u8{0} ** 26, .cost = 0, .move_code = 0, .occupied = false });
         const frontier = try allocator.alloc(HeapNode, @max(f_cap, 4));
-        return .{ .visited = v, .frontier = frontier, .mask = cap - 1, .count = 0, .allocator = allocator };
+        return .{
+            .ctrl = ctrl,
+            .visited = v,
+            .frontier = frontier,
+            .mask = cap - 1,
+            .count = 0,
+            .allocator = allocator,
+        };
     }
 
     pub fn deinit(self: *SearchBuffers) void {
+        self.allocator.free(self.ctrl);
         self.allocator.free(self.visited);
         self.allocator.free(self.frontier);
     }
 
     pub fn clear(self: *SearchBuffers) void {
-        @memset(self.visited, .{ .cube = [_]u8{0} ** 26, .cost = 0, .move_code = 0, .occupied = false });
+        @memset(self.ctrl, 0);
         self.count = 0;
     }
 
-    fn hash(cube: *const [26]u8) u64 {
+    inline fn hash(cube: *const [26]u8) u64 {
         var h: u64 = 0;
         inline for (0..3) |k| {
-            h = ((h << 5) | (h >> 59)) ^ std.mem.readInt(u64, cube[k * 8 .. k * 8 + 8], .little);
+            h = std.math.rotl(u64, h, 5) ^ std.mem.readInt(u64, cube[k * 8 .. k * 8 + 8], .little);
             h = h *% 0x517cc1b727220a95;
         }
-        return (((h << 5) | (h >> 59)) ^ @as(u64, std.mem.readInt(u16, cube[24..26], .little))) *% 0x517cc1b727220a95;
+        return (std.math.rotl(u64, h, 5) ^ @as(u64, std.mem.readInt(u16, cube[24..26], .little))) *% 0x517cc1b727220a95;
+    }
+
+    inline fn cubeEql(a: *const [26]u8, b: *const [26]u8) bool {
+        const a0 = std.mem.readInt(u64, a[0..8], .little);
+        const b0 = std.mem.readInt(u64, b[0..8], .little);
+        if (a0 != b0) return false;
+        const a1 = std.mem.readInt(u64, a[8..16], .little);
+        const b1 = std.mem.readInt(u64, b[8..16], .little);
+        if (a1 != b1) return false;
+        const a2 = std.mem.readInt(u64, a[16..24], .little);
+        const b2 = std.mem.readInt(u64, b[16..24], .little);
+        if (a2 != b2) return false;
+        const a3 = std.mem.readInt(u16, a[24..26], .little);
+        const b3 = std.mem.readInt(u16, b[24..26], .little);
+        return a3 == b3;
     }
 
     pub fn get(self: *const SearchBuffers, cube: *const [26]u8) ?struct { cost: u16, move_code: u8 } {
-        var idx: usize = @truncate(hash(cube) & self.mask);
+        const h = hash(cube);
+        const tag: u8 = @as(u8, @truncate(h >> 56)) | 0x80;
+        var idx: usize = @truncate(h & self.mask);
         while (true) : (idx = (idx + 1) & self.mask) {
+            const c = self.ctrl[idx];
+            if (c == 0) return null;
+            if (c != tag) continue;
             const entry = &self.visited[idx];
-            if (!entry.occupied) return null;
-            if (std.mem.eql(u8, &entry.cube, cube)) return .{ .cost = entry.cost, .move_code = entry.move_code };
+            if (cubeEql(&entry.cube, cube)) return .{ .cost = entry.cost, .move_code = entry.move_code };
         }
     }
 
     fn grow(self: *SearchBuffers) !void {
+        const old_ctrl = self.ctrl;
         const old_entries = self.visited;
-        const new_cap = old_entries.len * 2;
+        const new_cap = old_ctrl.len * 2;
+        const new_ctrl = try self.allocator.alloc(u8, new_cap);
+        errdefer self.allocator.free(new_ctrl);
+        @memset(new_ctrl, 0);
         const new_entries = try self.allocator.alloc(VisitedEntry, new_cap);
-        @memset(new_entries, .{ .cube = [_]u8{0} ** 26, .cost = 0, .move_code = 0, .occupied = false });
         const new_mask = new_cap - 1;
 
-        for (old_entries) |entry| {
-            if (!entry.occupied) continue;
+        for (old_ctrl, old_entries) |c, entry| {
+            if (c == 0) continue;
             var idx: usize = @truncate(hash(&entry.cube) & new_mask);
-            while (new_entries[idx].occupied) : (idx = (idx + 1) & new_mask) {}
+            while (new_ctrl[idx] != 0) : (idx = (idx + 1) & new_mask) {}
+            new_ctrl[idx] = c;
             new_entries[idx] = entry;
         }
 
+        self.ctrl = new_ctrl;
         self.visited = new_entries;
         self.mask = new_mask;
+        self.allocator.free(old_ctrl);
         self.allocator.free(old_entries);
     }
 
     pub fn putOrUpdate(self: *SearchBuffers, cube: *const [26]u8, cost: u16, move_code: u8) !enum { inserted, updated, skipped } {
-        if (self.count * 2 >= self.visited.len) try self.grow();
-        var idx: usize = @truncate(hash(cube) & self.mask);
+        if (self.count * 2 >= self.ctrl.len) try self.grow();
+        const h = hash(cube);
+        const tag: u8 = @as(u8, @truncate(h >> 56)) | 0x80;
+        var idx: usize = @truncate(h & self.mask);
         while (true) : (idx = (idx + 1) & self.mask) {
-            const entry = &self.visited[idx];
-            if (!entry.occupied) {
-                entry.* = .{ .cube = cube.*, .cost = cost, .move_code = move_code, .occupied = true };
+            const c = self.ctrl[idx];
+            if (c == 0) {
+                self.ctrl[idx] = tag;
+                self.visited[idx] = .{ .cube = cube.*, .cost = cost, .move_code = move_code };
                 self.count += 1;
                 return .inserted;
             }
-            if (std.mem.eql(u8, &entry.cube, cube)) {
-                if (cost < entry.cost) { entry.cost = cost; entry.move_code = move_code; return .updated; }
+            if (c != tag) continue;
+            const entry = &self.visited[idx];
+            if (cubeEql(&entry.cube, cube)) {
+                if (cost < entry.cost) {
+                    entry.cost = cost;
+                    entry.move_code = move_code;
+                    return .updated;
+                }
                 return .skipped;
             }
         }
@@ -433,7 +512,6 @@ pub fn astar(
                 if (simulated >= budget) break;
                 if (tables.prune_move[node.last_move][m]) continue;
 
-                _ = total_moves_simulated.fetchAdd(1, .monotonic);
                 simulated += 1;
                 const next_cost = node.cost + 1;
                 const dst = node.state.applyMove(m);
@@ -462,6 +540,7 @@ pub fn astar(
             }
             if (found_goal != null) break;
         }
+        _ = total_moves_simulated.fetchAdd(simulated, .monotonic);
 
         if (found_goal) |res| return res;
         if (simulated < budget or random_weight <= 0.0) return null;
@@ -475,7 +554,9 @@ pub fn astar(
 
 fn countSolved(c: *const FastCube, indices: []const usize) usize {
     var cnt: usize = 0;
-    for (indices) |j| if (tables.is_solved[j][c.data[j]]) { cnt += 1; };
+    for (indices) |j| if (tables.is_solved[j][c.data[j]]) {
+        cnt += 1;
+    };
     return cnt;
 }
 
@@ -488,14 +569,18 @@ fn topDone(i: usize, c: *const FastCube) bool {
 fn crossDone(i: usize, c: *const FastCube) bool {
     const d = Vec3{ .x = 0, .y = 0, .z = -1 };
     var ok: usize = 0;
-    for (BOT_EDGES) |j| if (tables.rotations[c.data[j]].mulVec(d).eql(d)) { ok += 1; };
+    for (BOT_EDGES) |j| if (tables.rotations[c.data[j]].mulVec(d).eql(d)) {
+        ok += 1;
+    };
     const req_bot = if (i >= 3) @min(4, i - 3) else 0;
     return topDone(16, c) and ok >= @min(4, i + 1) and countSolved(c, &BOT_EDGES) >= req_bot;
 }
 
 fn cornersDone(i: usize, c: *const FastCube) bool {
     var pos: usize = 0;
-    for (BOT_CORNERS) |j| if (tables.is_pos_solved[j][c.data[j]]) { pos += 1; };
+    for (BOT_CORNERS) |j| if (tables.is_pos_solved[j][c.data[j]]) {
+        pos += 1;
+    };
     return crossDone(7, c) and pos >= @min(4, i + 1);
 }
 
@@ -523,7 +608,10 @@ pub fn solveEndgame(cube: *FastCube, moves: *std.ArrayList(usize)) !void {
         while (true) {
             var target_c: usize = 0;
             const target_pos = Vec3{ .x = 1, .y = -1, .z = -1 };
-            for (0..26) |i| if (tables.rotations[cube.data[i]].mulVec(CUBELETS[i]).eql(target_pos)) { target_c = i; break; };
+            for (0..26) |i| if (tables.rotations[cube.data[i]].mulVec(CUBELETS[i]).eql(target_pos)) {
+                target_c = i;
+                break;
+            };
             if (cornerOriented(target_c, cube.data[target_c], bot)) break;
             for (routine) |m| try moves.append(cube.step(m));
         }
@@ -572,18 +660,26 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
     defer bufs.deinit();
 
     const H1 = struct {
-        fn goal(idx: usize, state: *const FastCube) bool { return topDone(idx, state); }
+        fn goal(idx: usize, state: *const FastCube) bool {
+            return topDone(idx, state);
+        }
         fn h(idx: usize, state: *const FastCube) f64 {
             const s = if (idx < 9) TOP_CUBELETS[0..] else MID_CUBELETS[0..];
             return state.layerH(s, &tables.sqrt_dist_solved, if (idx < 9) 8.0 else 4.0);
         }
     };
     const HCross = struct {
-        fn goal(idx: usize, state: *const FastCube) bool { return crossDone(idx, state); }
-        fn h(_: usize, state: *const FastCube) f64 { return state.layerH(NON_BOT_CORNERS[0..], &tables.sqrt_dist_solved, 3.0); }
+        fn goal(idx: usize, state: *const FastCube) bool {
+            return crossDone(idx, state);
+        }
+        fn h(_: usize, state: *const FastCube) f64 {
+            return state.layerH(NON_BOT_CORNERS[0..], &tables.sqrt_dist_solved, 3.0);
+        }
     };
     const HCorners = struct {
-        fn goal(idx: usize, state: *const FastCube) bool { return cornersDone(idx, state); }
+        fn goal(idx: usize, state: *const FastCube) bool {
+            return cornersDone(idx, state);
+        }
         fn h(_: usize, state: *const FastCube) f64 {
             const t_s = state.sumDist(TOP_CUBELETS[0..], &tables.sqrt_dist_solved);
             const m_s = state.sumDist(MID_LAYER[0..], &tables.sqrt_dist_solved);

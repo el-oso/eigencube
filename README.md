@@ -160,6 +160,9 @@ cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]
 
 # OCaml typed functional pearl (~3–8s):
 opam exec -- dune exec --root ocaml eigencube -- [seed]
+
+# High-performance Zig companion (~0.02s–0.2s, >10M moves/sec):
+(cd zig && zig build run -Doptimize=ReleaseFast -- [seed])
 ```
 
 ### 3. Programmatic Python API
@@ -265,5 +268,5 @@ Eigencube has inspired brilliant community projects based on the same linear alg
 - **A Functional Pearl (Maximally elegant, simple, and educational):** Eigencube is designed in the tradition of a *functional pearl*—an elegant, instructive gem where the code is an executable mathematical specification. Code clarity, linear algebra transparency, and pedagogical beauty always trump micro-optimizations or clever programming tricks.
 - **Self-documenting, transparent code:** Code should read as self-explanatory prose. Reject cryptic abbreviations, single-letter domain shorthand, or dense tuple indexing. Prefer clear, descriptive names (`left`, `top`, `bottom` rather than `L`, `U`, `D`) so anyone can understand the logic without an external decoder ring.
 - **Zero ambient magic:** No obscure puzzle encodings or heavyweight dependencies. Pure vector and matrix arithmetic.
-- **Strict code compactness:** The complete solver and domain model in `eigencube.py` (and in each reference language port) strictly stays below 400 lines of clean, readable code (with `rust_fast/` under 500 lines including its complete L1 Cayley group generators).
+- **Strict code compactness:** The complete solver and domain model in `eigencube.py` (and in each reference language port) strictly stays below 400 lines of clean, readable code (with `rust_fast/` under 500 lines and `zig/` under 670 lines including zero-dependency open-addressing hash table and min-heap).
 - **Headless-friendly:** GUI components decouple display initializers so importing `eigencube_gui` works seamlessly in headless CI/CD environments.

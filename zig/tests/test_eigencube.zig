@@ -162,8 +162,12 @@ test "6x sexy move identity" {
 test "deterministic budget exhaustion" {
     const c0 = FastCube.SOLVED;
     const Dummy = struct {
-        fn goal(_: void, _: *const FastCube) bool { return false; }
-        fn h(_: void, _: *const FastCube) f64 { return 0.0; }
+        fn goal(_: void, _: *const FastCube) bool {
+            return false;
+        }
+        fn h(_: void, _: *const FastCube) f64 {
+            return 0.0;
+        }
     };
     var bufs = try eigencube.SearchBuffers.init(std.testing.allocator, 1024, 1024);
     defer bufs.deinit();
@@ -260,9 +264,10 @@ test "full scramble solve with budget restarts" {
 }
 
 test "search buffer init allocation failure cleanup" {
-    // Fail on index 1: v succeeds, frontier fails. Verify errdefer cleans up v without leak.
-    var failing_alloc = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
-    try std.testing.expectError(error.OutOfMemory, eigencube.SearchBuffers.init(failing_alloc.allocator(), 16, 16));
+    for ([_]usize{ 0, 1, 2 }) |fail_idx| {
+        var failing_alloc = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_idx });
+        try std.testing.expectError(error.OutOfMemory, eigencube.SearchBuffers.init(failing_alloc.allocator(), 16, 16));
+    }
 }
 
 test "search buffer zero capacity init" {
@@ -283,4 +288,3 @@ test "min heap push with zero initial capacity" {
     const popped = heap.pop();
     try std.testing.expect(popped != null and popped.?.prio == 10);
 }
-
