@@ -67,7 +67,8 @@ class TestEigencube(unittest.TestCase):
 
         Seen from outside the face, a clockwise quarter turn about v takes each vector p
         perpendicular to v to M p with v · (p × M p) = -|p|²; counterclockwise gives +|p|².
-        Order-4, det and axis checks all pass for a mirror-imaged turn, so only this catches it.
+        Order-4, det and axis checks all pass for a mirror-imaged turn; this invariant
+        test and the Singmaster standard notation test below catch it.
         """
         for move in moves:
             v, direction = move
