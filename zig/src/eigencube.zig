@@ -354,21 +354,6 @@ pub const SearchBuffers = struct {
         return (std.math.rotl(u64, h, 5) ^ @as(u64, std.mem.readInt(u16, cube[24..26], .little))) *% 0x517cc1b727220a95;
     }
 
-    inline fn cubeEql(a: *const [26]u8, b: *const [26]u8) bool {
-        const a0 = std.mem.readInt(u64, a[0..8], .little);
-        const b0 = std.mem.readInt(u64, b[0..8], .little);
-        if (a0 != b0) return false;
-        const a1 = std.mem.readInt(u64, a[8..16], .little);
-        const b1 = std.mem.readInt(u64, b[8..16], .little);
-        if (a1 != b1) return false;
-        const a2 = std.mem.readInt(u64, a[16..24], .little);
-        const b2 = std.mem.readInt(u64, b[16..24], .little);
-        if (a2 != b2) return false;
-        const a3 = std.mem.readInt(u16, a[24..26], .little);
-        const b3 = std.mem.readInt(u16, b[24..26], .little);
-        return a3 == b3;
-    }
-
     pub fn get(self: *const SearchBuffers, cube: *const [26]u8) ?struct { cost: u16, move_code: u8 } {
         const h = hash(cube);
         const tag: u8 = @as(u8, @truncate(h >> 56)) | 0x80;
@@ -378,7 +363,7 @@ pub const SearchBuffers = struct {
             if (c == 0) return null;
             if (c != tag) continue;
             const entry = &self.visited[idx];
-            if (cubeEql(&entry.cube, cube)) return .{ .cost = entry.cost, .move_code = entry.move_code };
+            if (std.mem.eql(u8, &entry.cube, cube)) return .{ .cost = entry.cost, .move_code = entry.move_code };
         }
     }
 
@@ -422,7 +407,7 @@ pub const SearchBuffers = struct {
             }
             if (c != tag) continue;
             const entry = &self.visited[idx];
-            if (cubeEql(&entry.cube, cube)) {
+            if (std.mem.eql(u8, &entry.cube, cube)) {
                 if (cost < entry.cost) {
                     entry.cost = cost;
                     entry.move_code = move_code;
@@ -660,26 +645,17 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
     defer bufs.deinit();
 
     const H1 = struct {
-        fn goal(idx: usize, state: *const FastCube) bool {
-            return topDone(idx, state);
-        }
         fn h(idx: usize, state: *const FastCube) f64 {
             const s = if (idx < 9) TOP_CUBELETS[0..] else MID_CUBELETS[0..];
             return state.layerH(s, &tables.sqrt_dist_solved, if (idx < 9) 8.0 else 4.0);
         }
     };
     const HCross = struct {
-        fn goal(idx: usize, state: *const FastCube) bool {
-            return crossDone(idx, state);
-        }
         fn h(_: usize, state: *const FastCube) f64 {
             return state.layerH(NON_BOT_CORNERS[0..], &tables.sqrt_dist_solved, 3.0);
         }
     };
     const HCorners = struct {
-        fn goal(idx: usize, state: *const FastCube) bool {
-            return cornersDone(idx, state);
-        }
         fn h(_: usize, state: *const FastCube) f64 {
             const t_s = state.sumDist(TOP_CUBELETS[0..], &tables.sqrt_dist_solved);
             const m_s = state.sumDist(MID_LAYER[0..], &tables.sqrt_dist_solved);
@@ -688,9 +664,9 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
         }
     };
 
-    try solvePhase(allocator, &bufs, "solving cubelet", 17, 0.25, H1.goal, H1.h, &c, &moves);
-    try solvePhase(allocator, &bufs, "solving bottom cross", 8, 0.25, HCross.goal, HCross.h, &c, &moves);
-    try solvePhase(allocator, &bufs, "positioning bottom corners", 4, 0.30, HCorners.goal, HCorners.h, &c, &moves);
+    try solvePhase(allocator, &bufs, "solving cubelet", 17, 0.25, topDone, H1.h, &c, &moves);
+    try solvePhase(allocator, &bufs, "solving bottom cross", 8, 0.25, crossDone, HCross.h, &c, &moves);
+    try solvePhase(allocator, &bufs, "positioning bottom corners", 4, 0.30, cornersDone, HCorners.h, &c, &moves);
     try solveEndgame(&c, &moves);
 
     const t1 = std.time.nanoTimestamp();
