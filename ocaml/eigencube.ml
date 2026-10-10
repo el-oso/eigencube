@@ -13,6 +13,10 @@ type cube = (vec * mat) list [@@deriving compare, sexp]
 
 let norm1 (x, y, z) = Int.abs x + Int.abs y + Int.abs z
 let dot (x1, y1, z1) (x2, y2, z2) = (x1 * x2) + (y1 * y2) + (z1 * z2)
+let scale s (x, y, z) = (s * x, s * y, s * z)
+let sub (x1, y1, z1) (x2, y2, z2) = (x1 - x2, y1 - y2, z1 - z2)
+let scale_mat s (r0, r1, r2) = (scale s r0, scale s r1, scale s r2)
+let sub_mat (r0, r1, r2) (c0, c1, c2) = (sub r0 c0, sub r1 c1, sub r2 c2)
 
 let ( *@ ) ((m00, m01, m02), (m10, m11, m12), (m20, m21, m22)) (x, y, z) =
   ( (m00 * x) + (m01 * y) + (m02 * z),
@@ -45,10 +49,14 @@ let moves =
       [ { normal; dir = -1 }; { normal; dir = 1 } ]
   )
 
-let rot_mat { normal = x, y, _; dir } =
-  if x <> 0 then ((1, 0, 0), (0, 0, dir), (0, -dir, 0))
-  else if y <> 0 then ((0, 0, dir), (0, 1, 0), (-dir, 0, 0))
-  else ((0, dir, 0), (-dir, 0, 0), (0, 0, 1))
+(* A quarter turn about the normal v, clockwise as seen looking at that face
+   (dir = 1): M = v vᵀ - dir [v]ₓ, keeping the part along v and turning the
+   rest by the cross product with v.
+   https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle *)
+let rot_mat { normal = (x, y, z) as v; dir } =
+  let cross = ((0, -z, y), (z, 0, -x), (-y, x, 0)) in
+  let outer = (scale x v, scale y v, scale z v) in
+  sub_mat outer (scale_mat dir cross)
 
 let invert_move { normal; dir } = { normal; dir = -dir }
 
@@ -255,7 +263,7 @@ let solve_layer ~name ~total ~is_goal ~heuristic ~random_weight cube =
 let bottom_left_front_corner (cube : cube) =
   List.find_exn cube ~f:(fun (c, r) -> r *@ c = (1, -1, -1))
 
-(* Endgame: orient bottom corners using (R' D' R D) * 2/4 and align bottom face *)
+(* Endgame: orient bottom corners using (L' U' L U) * 2/4 and align bottom face *)
 let solve_endgame cube =
   let left = { normal = (0, -1, 0); dir = 1 } in
   let top = { normal = (0, 0, 1); dir = 1 } in
