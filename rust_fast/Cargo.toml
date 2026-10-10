@@ -1,5 +1,5 @@
 [package]
-name = "eigencube-perf"
+name = "eigencube-fast"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,11 +7,11 @@ edition = "2021"
 rustc-hash = "2.1"
 
 [[bin]]
-name = "eigencube-perf"
+name = "eigencube-fast"
 path = "src/main.rs"
 
 [lib]
-name = "eigencube_perf"
+name = "eigencube_fast"
 path = "src/lib.rs"
 
 [profile.release]

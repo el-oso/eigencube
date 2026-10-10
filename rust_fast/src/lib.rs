@@ -59,6 +59,7 @@ pub struct Move {
 impl Move {
   /// Exact closed-form Rodrigues rotation formula for 90-degree turns of unit axis v:
   /// R = v vᵀ - d [v]ₓ, where [v]ₓ is the cross-product skew-symmetric matrix.
+  /// https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
   pub const fn rot_mat(self) -> Mat3 {
     let (Vec3(x, y, z), d) = (self.normal, self.dir);
     Mat3(Vec3(x * x, d * z, -d * y), Vec3(-d * z, y * y, d * x), Vec3(d * y, -d * x, z * z))

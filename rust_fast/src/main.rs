@@ -1,4 +1,4 @@
-use eigencube_perf::{log, shuffle, solve, SOLVED_CUBE};
+use eigencube_fast::{log, shuffle, solve, SOLVED_CUBE};
 use std::env;
 
 fn print_usage() {

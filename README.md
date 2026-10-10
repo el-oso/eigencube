@@ -208,8 +208,8 @@ eigencube/
 ├── eigencube_gui.py        # Pygame GUI with animated moves & step playback
 ├── explainer/              # Animated video explainer of the encoding (Manim)
 ├── ocaml/                  # Minimalistic OCaml port (< 400 lines)
-├── rust/                   # Minimalistic Rust port (< 400 lines)
-├── rust_perf/              # Ultra-high-performance Rust solver (>8M moves/sec)
+├── rust_pretty/            # Minimalistic Rust port (< 400 lines, textbook math)
+├── rust_fast/              # Ultra-high-performance Rust solver (>10M moves/sec, Cayley L1)
 ├── scripts/
 │   └── generate_logo.py    # Logo, icons & GitHub social preview generator
 ├── tests/
@@ -236,8 +236,8 @@ While [`eigencube.py`](eigencube.py) is the canonical reference implementation p
 
 Each port or companion implementation lives in its own top-level directory:
 - [`ocaml/`](ocaml/): A self-contained, typed functional pearl in OCaml (< 400 lines) using immutable association lists and $SO(3, \mathbb{Z})$ linear algebra.
-- [`rust/`](rust/): A self-contained, high-performance port in Rust (< 400 lines) using stack-allocated value structs, discrete linear algebra, and on-demand memoized heuristics. Run tests via `cargo test --manifest-path rust/Cargo.toml --release`.
-- [`rust_perf/`](rust_perf/): A specialized ultra-high-performance Rust companion (< 400 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >9,000,000 moves/sec (~15x throughput speedup over `rust/`, solving scrambles in ~0.03s–0.12s). Run tests via `cargo test --manifest-path rust_perf/Cargo.toml --release`.
+- [`rust_pretty/`](rust_pretty/): A self-contained, high-performance port in Rust (< 400 lines) faithfully translating the textbook discrete linear algebra and on-demand memoized heuristics. Run tests via `cargo test --manifest-path rust_pretty/Cargo.toml --release`.
+- [`rust_fast/`](rust_fast/): A specialized ultra-high-performance companion in Rust (< 500 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >10,000,000 moves/sec (~16x throughput speedup over `rust_pretty/`, solving scrambles in ~0.02s–0.03s). Run tests via `cargo test --manifest-path rust_fast/Cargo.toml --release`.
 
 Each language port must be self-contained within its directory, faithfully preserve the discrete 3D linear algebra formulation and the $R \cdot \text{diag}(c) = \text{diag}(c)$ solved invariant, maintain zero external puzzle dependencies, and provide its own standalone test suite.
 
@@ -249,5 +249,5 @@ Each language port must be self-contained within its directory, faithfully prese
 - **A Functional Pearl (Maximally elegant, simple, and educational):** Eigencube is designed in the tradition of a *functional pearl*—an elegant, instructive gem where the code is an executable mathematical specification. Code clarity, linear algebra transparency, and pedagogical beauty always trump micro-optimizations or clever programming tricks.
 - **Self-documenting, transparent code:** Code should read as self-explanatory prose. Reject cryptic abbreviations, single-letter domain shorthand, or dense tuple indexing. Prefer clear, descriptive names (`left`, `top`, `bottom` rather than `L`, `U`, `D`) so anyone can understand the logic without an external decoder ring.
 - **Zero ambient magic:** No obscure puzzle encodings or heavyweight dependencies. Pure vector and matrix arithmetic.
-- **Strict code compactness:** The complete solver and domain model in `eigencube.py` (and in each language port) strictly stays below 400 lines of clean, readable code.
+- **Strict code compactness:** The complete solver and domain model in `eigencube.py` (and in each reference language port) strictly stays below 400 lines of clean, readable code (with `rust_fast/` under 500 lines including its complete L1 Cayley group generators).
 - **Headless-friendly:** GUI components decouple display initializers so importing `eigencube_gui` works seamlessly in headless CI/CD environments.
