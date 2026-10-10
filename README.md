@@ -141,19 +141,23 @@ python eigencube_gui.py
   - `Right Arrow`: Step forward through the solution moves (hold to fast-forward at 15×).
   - `Left Arrow`: Step backward through the solution moves (rewind).
 
-### 2. Command-Line Solver
+### 2. Command-Line Solvers
 
-Solve a scrambled cube directly from the terminal:
+Solve a scrambled cube directly from the terminal across any implementation (all accept an optional integer random seed, defaulting to `42`):
 
 ```bash
-# Solve a 100,000-move scramble with default seed (42)
-python eigencube.py
+# Python canonical reference (~15–25s):
+python eigencube.py [seed]
+python eigencube.py --benchmark          # Benchmark across 100 scrambles
 
-# Solve with a specific random seed
-python eigencube.py 123
+# Ultra-fast Rust companion (~0.02s, >10M moves/sec):
+cargo run --manifest-path rust_fast/Cargo.toml --release -- [seed]
 
-# Run benchmark across 100 random scrambles
-python eigencube.py --benchmark
+# Textbook linear algebra Rust port (~1.5s):
+cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]
+
+# OCaml typed functional pearl (~3–8s):
+opam exec -- dune exec --root ocaml eigencube -- [seed]
 ```
 
 ### 3. Programmatic Python API
@@ -235,9 +239,9 @@ eigencube/
 While [`eigencube.py`](eigencube.py) is the canonical reference implementation powering the visualizer, Eigencube welcomes self-contained ports of the core mathematical solver to other programming languages.
 
 Each port or companion implementation lives in its own top-level directory:
-- [`ocaml/`](ocaml/): A self-contained, typed functional pearl in OCaml (< 400 lines) using immutable association lists and $SO(3, \mathbb{Z})$ linear algebra.
-- [`rust_pretty/`](rust_pretty/): A self-contained, high-performance port in Rust (< 400 lines) faithfully translating the textbook discrete linear algebra and on-demand memoized heuristics. Run tests via `cargo test --manifest-path rust_pretty/Cargo.toml --release`.
-- [`rust_fast/`](rust_fast/): A specialized ultra-high-performance companion in Rust (< 500 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >10,000,000 moves/sec (~16x throughput speedup over `rust_pretty/`, solving scrambles in ~0.02s–0.03s). Run tests via `cargo test --manifest-path rust_fast/Cargo.toml --release`.
+- [`ocaml/`](ocaml/): A self-contained, typed functional pearl in OCaml (< 400 lines) using immutable association lists and $SO(3, \mathbb{Z})$ linear algebra. Run solver via `opam exec -- dune exec --root ocaml eigencube -- [seed]` and tests via `opam exec -- dune test --root ocaml`.
+- [`rust_pretty/`](rust_pretty/): A self-contained, high-performance port in Rust (< 400 lines) faithfully translating the textbook discrete linear algebra and on-demand memoized heuristics. Run solver via `cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_pretty/Cargo.toml --release`.
+- [`rust_fast/`](rust_fast/): A specialized ultra-high-performance companion in Rust (< 500 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >10,000,000 moves/sec (~16x throughput speedup over `rust_pretty/`, solving scrambles in ~0.02s–0.03s). Run solver via `cargo run --manifest-path rust_fast/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_fast/Cargo.toml --release`.
 
 Each language port must be self-contained within its directory, faithfully preserve the discrete 3D linear algebra formulation and the $R \cdot \text{diag}(c) = \text{diag}(c)$ solved invariant, maintain zero external puzzle dependencies, and provide its own standalone test suite.
 
