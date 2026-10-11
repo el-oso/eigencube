@@ -151,6 +151,7 @@ pub const Tables = struct {
     is_solved: [26][24]bool,
     is_pos_solved: [26][24]bool,
     prune_move: [13][12]bool,
+    zobrist: [26][24]u64,
 
     pub fn init() Tables {
         @setEvalBranchQuota(200_000);
@@ -208,7 +209,19 @@ pub const Tables = struct {
             }
         }
 
-        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .sqrt_dist_pos = sqrt_dist_pos, .is_solved = is_solved, .is_pos_solved = is_pos_solved, .prune_move = prune_move };
+        var zobrist: [26][24]u64 = undefined;
+        var rng_state: u64 = 0x9e3779b97f4a7c15;
+        for (0..26) |c| {
+            for (0..24) |r| {
+                rng_state +%= 0xbf58476d1ce4e5b9;
+                var z = rng_state;
+                z = (z ^ (z >> 30)) *% 0x94d049bb133111eb;
+                z = (z ^ (z >> 27)) *% 0xbf58476d1ce4e5b9;
+                zobrist[c][r] = z ^ (z >> 31);
+            }
+        }
+
+        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .sqrt_dist_pos = sqrt_dist_pos, .is_solved = is_solved, .is_pos_solved = is_pos_solved, .prune_move = prune_move, .zobrist = zobrist };
     }
 };
 
@@ -265,6 +278,12 @@ pub const FastCube = struct {
         return true;
     }
 
+    pub inline fn zobristHash(self: FastCube) u64 {
+        var h: u64 = 0;
+        inline for (0..26) |i| h ^= tables.zobrist[i][self.data[i]];
+        return h;
+    }
+
     pub inline fn sumDist(self: FastCube, indices: []const usize, dist: *const [26][24]f32) f32 {
         var s: f32 = 0;
         for (indices) |i| s += dist[i][self.data[i]];
@@ -306,7 +325,7 @@ pub const Rng = struct {
 // -- Pruned A* Search with Stochastic Restarts --------------------------------
 
 pub const VisitedEntry = struct { cube: [26]u8, cost: u16, move_code: u8 };
-pub const HeapNode = struct { prio: f64, cost: u16, last_move: u8, state: FastCube };
+pub const HeapNode = struct { prio: f64, hash: u64, cost: u16, last_move: u8, state: FastCube };
 
 pub const SearchBuffers = struct {
     ctrl: []u8,
@@ -345,17 +364,7 @@ pub const SearchBuffers = struct {
         self.count = 0;
     }
 
-    inline fn hash(cube: *const [26]u8) u64 {
-        var h: u64 = 0;
-        inline for (0..3) |k| {
-            h = std.math.rotl(u64, h, 5) ^ std.mem.readInt(u64, cube[k * 8 .. k * 8 + 8], .little);
-            h = h *% 0x517cc1b727220a95;
-        }
-        return (std.math.rotl(u64, h, 5) ^ @as(u64, std.mem.readInt(u16, cube[24..26], .little))) *% 0x517cc1b727220a95;
-    }
-
-    pub fn get(self: *const SearchBuffers, cube: *const [26]u8) ?struct { cost: u16, move_code: u8 } {
-        const h = hash(cube);
+    pub fn get(self: *const SearchBuffers, cube: *const [26]u8, h: u64) ?struct { cost: u16, move_code: u8 } {
         const tag: u8 = @as(u8, @truncate(h >> 56)) | 0x80;
         var idx: usize = @truncate(h & self.mask);
         while (true) : (idx = (idx + 1) & self.mask) {
@@ -379,7 +388,8 @@ pub const SearchBuffers = struct {
 
         for (old_ctrl, old_entries) |c, entry| {
             if (c == 0) continue;
-            var idx: usize = @truncate(hash(&entry.cube) & new_mask);
+            const h = (FastCube{ .data = entry.cube }).zobristHash();
+            var idx: usize = @truncate(h & new_mask);
             while (new_ctrl[idx] != 0) : (idx = (idx + 1) & new_mask) {}
             new_ctrl[idx] = c;
             new_entries[idx] = entry;
@@ -392,9 +402,8 @@ pub const SearchBuffers = struct {
         self.allocator.free(old_entries);
     }
 
-    pub fn putOrUpdate(self: *SearchBuffers, cube: *const [26]u8, cost: u16, move_code: u8) !enum { inserted, updated, skipped } {
+    pub fn putOrUpdate(self: *SearchBuffers, cube: *const [26]u8, h: u64, cost: u16, move_code: u8) !enum { inserted, updated, skipped } {
         if (self.count * 2 >= self.ctrl.len) try self.grow();
-        const h = hash(cube);
         const tag: u8 = @as(u8, @truncate(h >> 56)) | 0x80;
         var idx: usize = @truncate(h & self.mask);
         while (true) : (idx = (idx + 1) & self.mask) {
@@ -482,15 +491,16 @@ pub fn astar(
     while (true) {
         bufs.clear();
         frontier.len = 0;
-        _ = try bufs.putOrUpdate(&start.data, 0, 0);
-        try frontier.push(.{ .prio = 0, .cost = 0, .last_move = 0, .state = start });
+        const start_hash = start.zobristHash();
+        _ = try bufs.putOrUpdate(&start.data, start_hash, 0, 0);
+        try frontier.push(.{ .prio = 0, .hash = start_hash, .cost = 0, .last_move = 0, .state = start });
 
         var simulated: usize = 0;
         var found_goal: ?AStarResult = null;
 
         while (simulated < budget) {
             const node = frontier.pop() orelse break;
-            const visited_cost = bufs.get(&node.state.data) orelse continue;
+            const visited_cost = bufs.get(&node.state.data, node.hash) orelse continue;
             if (node.cost > visited_cost.cost) continue;
 
             for (0..12) |m| {
@@ -499,20 +509,31 @@ pub fn astar(
 
                 simulated += 1;
                 const next_cost = node.cost + 1;
-                const dst = node.state.applyMove(m);
+                var next_hash = node.hash;
+                var dst: FastCube = undefined;
+                for (0..26) |i| {
+                    const prev_r = node.state.data[i];
+                    const next_r = tables.transition[m][i][prev_r];
+                    dst.data[i] = next_r;
+                    if (prev_r != next_r) {
+                        next_hash ^= tables.zobrist[i][prev_r] ^ tables.zobrist[i][next_r];
+                    }
+                }
                 const mv_code: u8 = @intCast(m + 1);
 
-                if ((try bufs.putOrUpdate(&dst.data, next_cost, mv_code)) == .skipped) continue;
+                if ((try bufs.putOrUpdate(&dst.data, next_hash, next_cost, mv_code)) == .skipped) continue;
 
                 if (is_goal(ctx, &dst)) {
                     var path_list = std.ArrayList(usize).init(allocator);
                     errdefer path_list.deinit();
                     var curr = dst;
-                    while (bufs.get(&curr.data)) |entry| {
+                    var curr_h = next_hash;
+                    while (bufs.get(&curr.data, curr_h)) |entry| {
                         if (entry.move_code == 0) break;
                         const code = entry.move_code - 1;
                         try path_list.append(code);
                         curr = curr.applyMove(code ^ 1);
+                        curr_h = curr.zobristHash();
                     }
                     std.mem.reverse(usize, path_list.items);
                     found_goal = .{ .cube = dst, .path = try path_list.toOwnedSlice() };
@@ -521,7 +542,7 @@ pub fn astar(
 
                 const hw = if (random_weight > 0.0) @max(0.01, rng.randomGauss(1.0, random_weight)) else 1.0;
                 const prio = @as(f64, @floatFromInt(next_cost)) + hw * heuristic(ctx, &dst);
-                try frontier.push(.{ .prio = prio, .cost = next_cost, .last_move = mv_code, .state = dst });
+                try frontier.push(.{ .prio = prio, .hash = next_hash, .cost = next_cost, .last_move = mv_code, .state = dst });
             }
             if (found_goal != null) break;
         }

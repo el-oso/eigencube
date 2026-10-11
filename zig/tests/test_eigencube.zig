@@ -237,7 +237,7 @@ test "search buffer dynamic growth" {
     for (0..20) |step| {
         var c = FastCube.SOLVED;
         c.data[0] = @intCast(step);
-        _ = try bufs.putOrUpdate(&c.data, @intCast(step + 1), 1);
+        _ = try bufs.putOrUpdate(&c.data, c.zobristHash(), @intCast(step + 1), 1);
     }
     try std.testing.expect(bufs.visited.len >= 32);
     try std.testing.expect(bufs.count == 20);
@@ -282,9 +282,59 @@ test "min heap push with zero initial capacity" {
     var heap = eigencube.MinHeap{ .items = empty_slice, .len = 0, .allocator = std.testing.allocator };
     defer std.testing.allocator.free(heap.items);
 
-    try heap.push(.{ .prio = 10, .cost = 1, .last_move = 0, .state = FastCube.SOLVED });
+    try heap.push(.{ .prio = 10, .hash = FastCube.SOLVED.zobristHash(), .cost = 1, .last_move = 0, .state = FastCube.SOLVED });
     try std.testing.expect(heap.len == 1);
     try std.testing.expect(heap.items.len >= 4);
     const popped = heap.pop();
     try std.testing.expect(popped != null and popped.?.prio == 10);
+}
+
+test "comptime corner commutators form A4 subgroup" {
+    const count_3cycles = comptime blk: {
+        @setEvalBranchQuota(500_000);
+        var count: usize = 0;
+        for (0..12) |a| {
+            for (0..12) |b| {
+                for (0..12) |c| {
+                    const seq = [8]usize{ a, b, a ^ 1, c, a, b ^ 1, a ^ 1, c ^ 1 };
+                    var cube = FastCube.SOLVED;
+                    for (seq) |m| cube = cube.applyMove(m);
+
+                    var preserves = true;
+                    for (eigencube.TOP_CUBELETS) |i| if (!tables.is_solved[i][cube.data[i]]) {
+                        preserves = false;
+                        break;
+                    };
+                    if (!preserves) continue;
+                    for (eigencube.MID_LAYER) |i| if (!tables.is_solved[i][cube.data[i]]) {
+                        preserves = false;
+                        break;
+                    };
+                    if (!preserves) continue;
+                    for (eigencube.BOT_EDGES) |i| if (!tables.is_solved[i][cube.data[i]]) {
+                        preserves = false;
+                        break;
+                    };
+                    if (!preserves) continue;
+
+                    var perms: [4]usize = undefined;
+                    for (eigencube.BOT_CORNERS, 0..) |ci, idx| {
+                        const rot = tables.rotations[cube.data[ci]];
+                        const pos = rot.mulVec(CUBELETS[ci]);
+                        for (eigencube.BOT_CORNERS, 0..) |target_ci, target_idx| {
+                            if (CUBELETS[target_ci].eql(pos)) {
+                                perms[idx] = target_idx;
+                                break;
+                            }
+                        }
+                    }
+                    if (perms[0] != 0 or perms[1] != 1 or perms[2] != 2 or perms[3] != 3) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        break :blk count;
+    };
+    try std.testing.expect(count_3cycles == 24);
 }
