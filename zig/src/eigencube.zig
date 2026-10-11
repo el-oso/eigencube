@@ -781,7 +781,8 @@ pub fn solveEndgame(cube: *FastCube, moves: *std.ArrayList(usize)) !void {
     const routine = [8]usize{ left ^ 1, top ^ 1, left, top, left ^ 1, top ^ 1, left, top };
 
     for (0..4) |_| {
-        while (true) {
+        var routine_count: usize = 0;
+        while (routine_count < 6) : (routine_count += 1) {
             var target_c: usize = 0;
             for (0..26) |i| if (tables.rotations[cube.data[i]].mulVec(CUBELETS[i]).eql(.{ .x = 1, .y = -1, .z = -1 })) {
                 target_c = i;
@@ -790,6 +791,7 @@ pub fn solveEndgame(cube: *FastCube, moves: *std.ArrayList(usize)) !void {
             if (cornerOriented(target_c, cube.data[target_c], bot)) break;
             for (routine) |m| try moves.append(cube.step(m));
         }
+        if (routine_count >= 6) return error.UnsolvableCube;
         try moves.append(cube.step(bot));
     }
     var turns: usize = 0;

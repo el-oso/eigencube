@@ -435,6 +435,25 @@ test "tables.edge_solution covers all 192 states and rejects unreachable states"
     }
     try std.testing.expectEqual(192, reachable_count);
     try std.testing.expectEqual(4096 - 192, unreachable_count);
+
+    // Verify round-trip solution on all 192 reachable states
+    for (tables.edge_solution) |sol| {
+        if (sol.len == 255) continue;
+        var state = FastCube.SOLVED;
+        var k = sol.len;
+        while (k > 0) : (k -= 1) {
+            state = state.applyMove(sol.moves[k - 1] ^ 1);
+        }
+        for (0..sol.len) |idx| {
+            state = state.applyMove(sol.moves[idx]);
+        }
+        for (eigencube.BOT_EDGES) |be| {
+            try std.testing.expect(tables.is_solved[be][state.data[be]]);
+        }
+        for (eigencube.MID_CUBELETS) |mc| {
+            try std.testing.expect(tables.is_solved[mc][state.data[mc]]);
+        }
+    }
 }
 
 test "solve returns error on unsolvable edge state" {
