@@ -355,17 +355,19 @@ pub const FastCube = struct {
         return @as(f64, @floatCast((s * s) / div));
     }
 
-    pub fn getCornerCode(self: FastCube) u8 {
+    pub fn getCornerCode(self: FastCube) ?u8 {
         var code: u8 = 0;
         for (BOT_CORNERS, 0..) |ci, idx| {
-            const rot = tables.rotations[self.data[ci]];
-            const pos = rot.mulVec(CUBELETS[ci]);
+            const pos = tables.rotations[self.data[ci]].mulVec(CUBELETS[ci]);
+            var found = false;
             for (BOT_CORNERS, 0..) |target_ci, target_idx| {
                 if (CUBELETS[target_ci].eql(pos)) {
                     code |= @as(u8, @intCast(target_idx)) << @as(u3, @intCast(idx * 2));
+                    found = true;
                     break;
                 }
             }
+            if (!found) return null;
         }
         return code;
     }
@@ -681,8 +683,7 @@ pub fn solveEndgame(cube: *FastCube, moves: *std.ArrayList(usize)) !void {
     for (0..4) |_| {
         while (true) {
             var target_c: usize = 0;
-            const target_pos = Vec3{ .x = 1, .y = -1, .z = -1 };
-            for (0..26) |i| if (tables.rotations[cube.data[i]].mulVec(CUBELETS[i]).eql(target_pos)) {
+            for (0..26) |i| if (tables.rotations[cube.data[i]].mulVec(CUBELETS[i]).eql(.{ .x = 1, .y = -1, .z = -1 })) {
                 target_c = i;
                 break;
             };
@@ -691,7 +692,11 @@ pub fn solveEndgame(cube: *FastCube, moves: *std.ArrayList(usize)) !void {
         }
         try moves.append(cube.step(bot));
     }
-    while (!cube.isSolved()) try moves.append(cube.step(bot));
+    var turns: usize = 0;
+    while (!cube.isSolved() and turns < 4) : (turns += 1) {
+        try moves.append(cube.step(bot));
+    }
+    if (!cube.isSolved()) return error.UnsolvableCube;
 }
 
 fn solvePhase(
@@ -748,7 +753,8 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
     try solvePhase(allocator, &bufs, "solving cubelet", 17, 0.25, topDone, H1.h, &c, &moves);
     try solvePhase(allocator, &bufs, "solving bottom cross", 8, 0.25, crossDone, HCross.h, &c, &moves);
     log("positioning bottom corners", .{});
-    const corner_sol = tables.corner_solution[c.getCornerCode()];
+    const corner_code = c.getCornerCode() orelse return error.UnsolvableCorners;
+    const corner_sol = tables.corner_solution[corner_code];
     if (corner_sol.len == 255) return error.UnsolvableCorners;
     log("-> found solution with {d} moves", .{corner_sol.len});
     for (0..corner_sol.len) |k| try moves.append(c.step(corner_sol.moves[k]));

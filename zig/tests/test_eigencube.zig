@@ -407,3 +407,26 @@ test "comptime zobrist_diff and is_bottom_down mathematical invariants" {
         }
     }
 }
+
+test "tables.corner_solution rejects unreachable corner codes" {
+    // A single transposition of bottom corners (0 <-> 1, 2, 3 fixed) has code:
+    // (1 << 0) | (0 << 2) | (2 << 4) | (3 << 6) = 225.
+    // Since (1, 0, 2, 3) has odd parity, it is not in the alternating group A4.
+    const odd_code = (1 << 0) | (0 << 2) | (2 << 4) | (3 << 6);
+    try std.testing.expectEqual(@as(u8, 255), tables.corner_solution[odd_code].len);
+
+    // Verify all 244 unreachable slots in tables.corner_solution have len == 255
+    var unreachable_count: usize = 0;
+    for (tables.corner_solution) |sol| {
+        if (sol.len == 255) unreachable_count += 1;
+    }
+    try std.testing.expectEqual(256 - 12, unreachable_count);
+}
+
+test "solve returns error on unsolvable corner state" {
+    var fc = FastCube.SOLVED;
+    fc.data[eigencube.BOT_CORNERS[0]] = 1;
+
+    const invalid_cube = fc.toCube();
+    try std.testing.expectError(error.UnsolvableCorners, solve(std.testing.allocator, invalid_cube));
+}
