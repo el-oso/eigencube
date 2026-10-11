@@ -141,9 +141,31 @@ fn computeDistanceTable(
     }
 }
 
-pub const CornerPosSolution = struct { len: u8, moves: [16]u8 };
-pub const CornerOrientSolution = struct { len: u8, moves: [56]u8 };
+pub const CornerSolution = struct { len: u8, moves: [60]u8 };
 pub const EdgeSolution = struct { len: u8, moves: [30]u8 };
+
+pub const A4_MAP: [256]u8 = init: {
+    var map = [_]u8{255} ** 256;
+    const perms = [12][4]u8{
+        .{ 0, 1, 2, 3 },
+        .{ 0, 2, 3, 1 },
+        .{ 0, 3, 1, 2 },
+        .{ 1, 0, 3, 2 },
+        .{ 1, 2, 0, 3 },
+        .{ 1, 3, 2, 0 },
+        .{ 2, 0, 1, 3 },
+        .{ 2, 1, 3, 0 },
+        .{ 2, 3, 0, 1 },
+        .{ 3, 0, 2, 1 },
+        .{ 3, 1, 0, 2 },
+        .{ 3, 2, 1, 0 },
+    };
+    for (perms, 0..) |p, idx| {
+        const code = @as(usize, p[0]) | (@as(usize, p[1]) << 2) | (@as(usize, p[2]) << 4) | (@as(usize, p[3]) << 6);
+        map[code] = @intCast(idx);
+    }
+    break :init map;
+};
 
 pub const Tables = struct {
     rotations: [24]Mat3,
@@ -154,12 +176,13 @@ pub const Tables = struct {
     zobrist: [26][24]u64,
     zobrist_diff: [12][26][24]u64,
     is_bottom_down: [24]bool,
-    corner_pos_solution: [256]CornerPosSolution,
-    corner_orient_solution: [27]CornerOrientSolution,
+    corner_solution: [324]CornerSolution,
+    corner_slot: [4][24]u8,
+    corner_orient: [4][24]u8,
     edge_solution: [4096]EdgeSolution,
 
     pub fn init() Tables {
-        @setEvalBranchQuota(1_500_000);
+        @setEvalBranchQuota(3_000_000);
         var rotations: [24]Mat3 = undefined;
         rotations[0] = Mat3.id;
         var rot_len: usize = 1;
@@ -236,99 +259,167 @@ pub const Tables = struct {
             }
         }
 
-        var corner_pos_solution = [_]CornerPosSolution{.{ .len = 255, .moves = undefined }} ** 256;
-        const POS_GENERATORS = [8]struct { p: [4]u8, m: [8]u8 }{
-            .{ .p = .{ 1, 3, 2, 0 }, .m = .{ 0, 2, 1, 8, 0, 3, 1, 9 } },
-            .{ .p = .{ 0, 3, 1, 2 }, .m = .{ 0, 3, 1, 8, 0, 2, 1, 9 } },
-            .{ .p = .{ 2, 1, 3, 0 }, .m = .{ 1, 8, 0, 3, 1, 9, 0, 2 } },
-            .{ .p = .{ 2, 0, 1, 3 }, .m = .{ 1, 9, 0, 3, 1, 8, 0, 2 } },
-            .{ .p = .{ 1, 2, 0, 3 }, .m = .{ 2, 10, 3, 0, 2, 11, 3, 1 } },
-            .{ .p = .{ 0, 2, 3, 1 }, .m = .{ 3, 0, 2, 11, 3, 1, 2, 10 } },
-            .{ .p = .{ 3, 0, 2, 1 }, .m = .{ 4, 10, 5, 1, 4, 11, 5, 0 } },
-            .{ .p = .{ 3, 1, 0, 2 }, .m = .{ 5, 9, 4, 2, 5, 8, 4, 3 } },
+        var corner_solution = [_]CornerSolution{.{ .len = 255, .moves = undefined }} ** 324;
+        const A4_GENS = [8][8]u8{
+            .{ 0, 2, 1, 8, 0, 3, 1, 9 },
+            .{ 0, 3, 1, 8, 0, 2, 1, 9 },
+            .{ 1, 8, 0, 3, 1, 9, 0, 2 },
+            .{ 1, 9, 0, 3, 1, 8, 0, 2 },
+            .{ 2, 10, 3, 0, 2, 11, 3, 1 },
+            .{ 3, 0, 2, 11, 3, 1, 2, 10 },
+            .{ 4, 10, 5, 1, 4, 11, 5, 0 },
+            .{ 5, 9, 4, 2, 5, 8, 4, 3 },
+        };
+        const TWIST_GENS = [6]struct { len: usize, m: [20]u8 }{
+            .{ .len = 18, .m = .{ 2, 6, 3, 7, 2, 6, 3, 7, 5, 6, 2, 7, 3, 6, 2, 7, 3, 4, 0, 0 } },
+            .{ .len = 20, .m = .{ 2, 6, 3, 7, 2, 6, 3, 7, 5, 5, 6, 2, 7, 3, 6, 2, 7, 3, 4, 4 } },
+            .{ .len = 18, .m = .{ 2, 6, 3, 7, 2, 6, 3, 7, 4, 6, 2, 7, 3, 6, 2, 7, 3, 5, 0, 0 } },
+            .{ .len = 18, .m = .{ 5, 2, 6, 3, 7, 2, 6, 3, 7, 4, 6, 2, 7, 3, 6, 2, 7, 3, 0, 0 } },
+            .{ .len = 20, .m = .{ 5, 5, 2, 6, 3, 7, 2, 6, 3, 7, 4, 4, 6, 2, 7, 3, 6, 2, 7, 3 } },
+            .{ .len = 18, .m = .{ 4, 2, 6, 3, 7, 2, 6, 3, 7, 5, 6, 2, 7, 3, 6, 2, 7, 3, 0, 0 } },
+        };
+        const Gen = struct { len: usize, m: [20]u8 };
+        const CORNER_GENERATORS: [14]Gen = init_cg: {
+            var g: [14]Gen = undefined;
+            for (A4_GENS, 0..) |ag, k| {
+                var m = [_]u8{0} ** 20;
+                for (0..8) |j| m[j] = ag[j];
+                g[k] = .{ .len = 8, .m = m };
+            }
+            for (TWIST_GENS, 0..) |tg, k| {
+                g[8 + k] = .{ .len = tg.len, .m = tg.m };
+            }
+            break :init_cg g;
         };
 
-        corner_pos_solution[228] = .{ .len = 0, .moves = [_]u8{0} ** 16 };
-        var queue_p: [12][4]u8 = undefined;
-        var queue_pos_moves: [12][16]u8 = undefined;
-        var queue_pos_lens: [12]u8 = undefined;
-        queue_p[0] = .{ 0, 1, 2, 3 };
-        queue_pos_lens[0] = 0;
-        var q_pos_len: usize = 1;
-        var q_pos_head: usize = 0;
-
-        while (q_pos_head < q_pos_len) : (q_pos_head += 1) {
-            const curr_p = queue_p[q_pos_head];
-            const curr_len = queue_pos_lens[q_pos_head];
-            const curr_moves = queue_pos_moves[q_pos_head];
-            if (curr_len >= 16) continue;
-
-            for (POS_GENERATORS) |gen| {
-                const nxt_p = [4]u8{ gen.p[curr_p[0]], gen.p[curr_p[1]], gen.p[curr_p[2]], gen.p[curr_p[3]] };
-                const code = @as(usize, nxt_p[0]) | (@as(usize, nxt_p[1]) << 2) | (@as(usize, nxt_p[2]) << 4) | (@as(usize, nxt_p[3]) << 6);
-                if (corner_pos_solution[code].len == 255) {
-                    const new_len = curr_len + 8;
-                    var fwd: [16]u8 = undefined;
-                    for (0..curr_len) |k| fwd[k] = curr_moves[k];
-                    for (0..8) |k| fwd[curr_len + k] = gen.m[k];
-
-                    var sol_moves: [16]u8 = undefined;
-                    for (0..new_len) |k| sol_moves[k] = fwd[new_len - 1 - k] ^ 1;
-                    corner_pos_solution[code] = .{ .len = new_len, .moves = sol_moves };
-
-                    queue_p[q_pos_len] = nxt_p;
-                    queue_pos_lens[q_pos_len] = new_len;
-                    queue_pos_moves[q_pos_len] = fwd;
-                    q_pos_len += 1;
+        var corner_slot: [4][24]u8 = undefined;
+        var corner_orient: [4][24]u8 = undefined;
+        for (BOT_CORNERS, 0..) |slot_ci, idx| {
+            for (rotations, 0..) |rot, r| {
+                const pos = rot.mulVec(CUBELETS[slot_ci]);
+                var found = false;
+                var target_slot: u8 = 255;
+                for (BOT_CORNERS, 0..) |target_ci, ti| {
+                    if (CUBELETS[target_ci].eql(pos)) {
+                        target_slot = @intCast(ti);
+                        found = true;
+                        break;
+                    }
+                }
+                corner_slot[idx][r] = target_slot;
+                if (!found) {
+                    corner_orient[idx][r] = 255;
+                    continue;
+                }
+                const bv = rot.mulVec(.{ .x = 0, .y = 0, .z = -1 });
+                if (bv.z == -1) {
+                    corner_orient[idx][r] = 0;
+                } else if (target_slot == 0 or target_slot == 3) {
+                    corner_orient[idx][r] = if (bv.y != 0) 1 else 2;
+                } else {
+                    corner_orient[idx][r] = if (bv.x != 0) 1 else 2;
                 }
             }
         }
 
-        var corner_orient_solution = [_]CornerOrientSolution{.{ .len = 255, .moves = undefined }} ** 27;
-        const ORIENT_GENERATORS = [6]struct { d: [4]u8, len: usize, m: [20]u8 }{
-            .{ .d = .{ 2, 0, 1, 0 }, .len = 18, .m = .{ 2, 6, 3, 7, 2, 6, 3, 7, 5, 6, 2, 7, 3, 6, 2, 7, 3, 4, 0, 0 } },
-            .{ .d = .{ 0, 2, 1, 0 }, .len = 20, .m = .{ 2, 6, 3, 7, 2, 6, 3, 7, 5, 5, 6, 2, 7, 3, 6, 2, 7, 3, 4, 4 } },
-            .{ .d = .{ 0, 0, 1, 2 }, .len = 18, .m = .{ 2, 6, 3, 7, 2, 6, 3, 7, 4, 6, 2, 7, 3, 6, 2, 7, 3, 5, 0, 0 } },
-            .{ .d = .{ 1, 0, 2, 0 }, .len = 18, .m = .{ 5, 2, 6, 3, 7, 2, 6, 3, 7, 4, 6, 2, 7, 3, 6, 2, 7, 3, 0, 0 } },
-            .{ .d = .{ 0, 1, 2, 0 }, .len = 20, .m = .{ 5, 5, 2, 6, 3, 7, 2, 6, 3, 7, 4, 4, 6, 2, 7, 3, 6, 2, 7, 3 } },
-            .{ .d = .{ 0, 0, 2, 1 }, .len = 18, .m = .{ 4, 2, 6, 3, 7, 2, 6, 3, 7, 5, 6, 2, 7, 3, 6, 2, 7, 3, 0, 0 } },
-        };
+        const computeCornerIndex = struct {
+            fn get(c_rots: [4]u8, slot_tab: *const [4][24]u8, orient_tab: *const [4][24]u8) ?usize {
+                var p_code: usize = 0;
+                var orients: [4]usize = undefined;
+                var slot_mask: u4 = 0;
 
-        corner_orient_solution[0] = .{ .len = 0, .moves = [_]u8{0} ** 56 };
-        var o_queue: [27][4]u8 = undefined;
-        var o_queue_lens: [27]u8 = undefined;
-        var o_queue_moves: [27][56]u8 = undefined;
-        o_queue[0] = .{ 0, 0, 0, 0 };
-        o_queue_lens[0] = 0;
-        var oq_len: usize = 1;
-        var oq_head: usize = 0;
+                inline for (0..4) |idx| {
+                    const r = c_rots[idx];
+                    const target_slot = slot_tab[idx][r];
+                    if (target_slot == 255) return null;
+                    const bit: u4 = @as(u4, 1) << @as(u2, @intCast(target_slot));
+                    if ((slot_mask & bit) != 0) return null;
+                    slot_mask |= bit;
 
-        while (oq_head < oq_len) : (oq_head += 1) {
-            const curr_o = o_queue[oq_head];
-            const curr_len = o_queue_lens[oq_head];
-            const curr_m = o_queue_moves[oq_head];
+                    p_code |= @as(usize, target_slot) << @as(u3, @intCast(idx * 2));
+                    orients[idx] = orient_tab[idx][r];
+                }
 
-            for (ORIENT_GENERATORS) |gen| {
-                const nxt_o = [4]u8{
-                    (curr_o[0] + gen.d[0]) % 3,
-                    (curr_o[1] + gen.d[1]) % 3,
-                    (curr_o[2] + gen.d[2]) % 3,
-                    (curr_o[3] + gen.d[3]) % 3,
-                };
-                const idx = @as(usize, nxt_o[0]) + 3 * @as(usize, nxt_o[1]) + 9 * @as(usize, nxt_o[2]);
-                if (corner_orient_solution[idx].len == 255) {
-                    const next_len = curr_len + gen.len;
-                    var sol_moves: [56]u8 = undefined;
-                    for (0..gen.len) |k| sol_moves[k] = gen.m[gen.len - 1 - k] ^ 1;
-                    for (0..curr_len) |k| sol_moves[gen.len + k] = curr_m[k];
+                const p_idx = A4_MAP[p_code];
+                if (p_idx == 255) return null;
 
-                    corner_orient_solution[idx] = .{ .len = @intCast(next_len), .moves = sol_moves };
-                    o_queue[oq_len] = nxt_o;
-                    o_queue_lens[oq_len] = @intCast(next_len);
-                    o_queue_moves[oq_len] = sol_moves;
-                    oq_len += 1;
+                if ((orients[0] + orients[1] + orients[2] + orients[3]) % 3 != 0) return null;
+
+                const o_idx = orients[0] + 3 * orients[1] + 9 * orients[2];
+                return @as(usize, p_idx) * 27 + o_idx;
+            }
+        }.get;
+
+        var parent_state = [_]u16{0} ** 324;
+        var parent_gen = [_]u8{0} ** 324;
+
+        corner_solution[0] = .{ .len = 0, .moves = [_]u8{0} ** 60 };
+        var corner_q_state: [324]u16 = undefined;
+        var corner_q_rots: [324][4]u8 = undefined;
+        var corner_q_lens: [324]u8 = undefined;
+        corner_q_state[0] = 0;
+        corner_q_rots[0] = [_]u8{ 0, 0, 0, 0 };
+        corner_q_lens[0] = 0;
+        var cq_len: usize = 1;
+        var cq_head: usize = 0;
+
+        var gen_rot_trans: [14][4][24]u8 = undefined;
+        for (CORNER_GENERATORS, 0..) |gen, g_idx| {
+            for (0..4) |j| {
+                for (0..24) |r| {
+                    var cur_r: u8 = @intCast(r);
+                    for (0..gen.len) |k| {
+                        cur_r = transition[gen.m[k]][BOT_CORNERS[j]][cur_r];
+                    }
+                    gen_rot_trans[g_idx][j][r] = cur_r;
                 }
             }
+        }
+
+        while (cq_head < cq_len) : (cq_head += 1) {
+            const curr_state = corner_q_state[cq_head];
+            const curr_rots = corner_q_rots[cq_head];
+            const curr_len = corner_q_lens[cq_head];
+
+            for (CORNER_GENERATORS, 0..) |gen, g_idx| {
+                const nxt_rots = [4]u8{
+                    gen_rot_trans[g_idx][0][curr_rots[0]],
+                    gen_rot_trans[g_idx][1][curr_rots[1]],
+                    gen_rot_trans[g_idx][2][curr_rots[2]],
+                    gen_rot_trans[g_idx][3][curr_rots[3]],
+                };
+                const maybe_idx = computeCornerIndex(nxt_rots, &corner_slot, &corner_orient);
+                if (maybe_idx) |idx| {
+                    if (corner_solution[idx].len == 255) {
+                        const next_len = curr_len + gen.len;
+                        corner_solution[idx].len = @intCast(next_len);
+                        parent_state[idx] = curr_state;
+                        parent_gen[idx] = @intCast(g_idx);
+                        corner_q_state[cq_len] = @intCast(idx);
+                        corner_q_rots[cq_len] = nxt_rots;
+                        corner_q_lens[cq_len] = @intCast(next_len);
+                        cq_len += 1;
+                    }
+                }
+            }
+        }
+
+        // Reconstruct solution move sequences from parent pointers
+        for (1..324) |idx| {
+            if (corner_solution[idx].len == 255) continue;
+            var s: usize = idx;
+            var pos: usize = 0;
+            var sol = [_]u8{0} ** 60;
+            while (s != 0) {
+                const g = parent_gen[s];
+                const gen = CORNER_GENERATORS[g];
+                for (0..gen.len) |k| {
+                    sol[pos + k] = gen.m[gen.len - 1 - k] ^ 1;
+                }
+                pos += gen.len;
+                s = parent_state[s];
+            }
+            corner_solution[idx] = .{ .len = @intCast(pos), .moves = sol };
         }
 
         var edge_solution = [_]EdgeSolution{.{ .len = 255, .moves = undefined }} ** 4096;
@@ -420,7 +511,7 @@ pub const Tables = struct {
             }
         }
 
-        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .is_solved = is_solved, .prune_move = prune_move, .zobrist = zobrist, .zobrist_diff = zobrist_diff, .is_bottom_down = is_bottom_down, .corner_pos_solution = corner_pos_solution, .corner_orient_solution = corner_orient_solution, .edge_solution = edge_solution };
+        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .is_solved = is_solved, .prune_move = prune_move, .zobrist = zobrist, .zobrist_diff = zobrist_diff, .is_bottom_down = is_bottom_down, .corner_solution = corner_solution, .corner_slot = corner_slot, .corner_orient = corner_orient, .edge_solution = edge_solution };
     }
 };
 
@@ -494,38 +585,31 @@ pub const FastCube = struct {
         return @as(f64, @floatCast((s * s) / div));
     }
 
-    pub fn getCornerCode(self: FastCube) ?u8 {
-        var code: u8 = 0;
-        for (BOT_CORNERS, 0..) |ci, idx| {
-            const pos = tables.rotations[self.data[ci]].mulVec(CUBELETS[ci]);
-            var found = false;
-            for (BOT_CORNERS, 0..) |target_ci, target_idx| {
-                if (CUBELETS[target_ci].eql(pos)) {
-                    code |= @as(u8, @intCast(target_idx)) << @as(u3, @intCast(idx * 2));
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return null;
-        }
-        return code;
-    }
+    pub fn getCornerIndex(self: FastCube) ?usize {
+        var p_code: usize = 0;
+        var orients = [_]usize{0} ** 4;
+        var slot_mask: u4 = 0;
 
-    pub fn getCornerOrientIndex(self: FastCube) ?usize {
-        var orients: [4]usize = undefined;
-        for (BOT_CORNERS, 0..) |ci, idx| {
-            const rot = tables.rotations[self.data[ci]];
-            const bv = rot.mulVec(.{ .x = 0, .y = 0, .z = -1 });
-            if (bv.z == -1) {
-                orients[idx] = 0;
-            } else if (idx == 0 or idx == 3) {
-                orients[idx] = if (bv.y != 0) 1 else 2;
-            } else {
-                orients[idx] = if (bv.x != 0) 1 else 2;
-            }
+        for (BOT_CORNERS, 0..) |slot_ci, idx| {
+            const r = self.data[slot_ci];
+            const target_slot = tables.corner_slot[idx][r];
+            if (target_slot == 255) return null;
+            const bit: u4 = @as(u4, 1) << @as(u2, @intCast(target_slot));
+            if ((slot_mask & bit) != 0) return null;
+            slot_mask |= bit;
+
+            p_code |= @as(usize, target_slot) << @as(u3, @intCast(idx * 2));
+            orients[idx] = tables.corner_orient[idx][r];
         }
-        if ((orients[0] + orients[1] + orients[2] + orients[3]) % 3 != 0) return null;
-        return orients[0] + 3 * orients[1] + 9 * orients[2];
+
+        const p_idx = A4_MAP[p_code];
+        if (p_idx == 255) return null;
+
+        const sum_o = orients[0] + orients[1] + orients[2] + orients[3];
+        if (sum_o % 3 != 0) return null;
+
+        const o_idx = orients[0] + 3 * orients[1] + 9 * orients[2];
+        return @as(usize, p_idx) * 27 + o_idx;
     }
 
     pub fn getEdgeCode(self: FastCube) ?u12 {
@@ -878,21 +962,12 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
     if (edge_sol.len == 255) return error.UnsolvableEdges;
     log("-> found solution with {d} moves", .{edge_sol.len});
     for (0..edge_sol.len) |k| try moves.append(c.step(edge_sol.moves[k]));
-    log("--------------------------------------------------", .{});
-    log("positioning bottom corners", .{});
-    const corner_code = c.getCornerCode() orelse return error.UnsolvableCorners;
-    const corner_pos_sol = tables.corner_pos_solution[corner_code];
-    if (corner_pos_sol.len == 255) return error.UnsolvableCorners;
-    log("-> found solution with {d} moves", .{corner_pos_sol.len});
-    for (0..corner_pos_sol.len) |k| try moves.append(c.step(corner_pos_sol.moves[k]));
-    log("--------------------------------------------------", .{});
-
-    log("orienting bottom corners", .{});
-    const corner_orient_idx = c.getCornerOrientIndex() orelse return error.UnsolvableCorners;
-    const corner_orient_sol = tables.corner_orient_solution[corner_orient_idx];
-    if (corner_orient_sol.len == 255) return error.UnsolvableCorners;
-    log("-> found solution with {d} moves", .{corner_orient_sol.len});
-    for (0..corner_orient_sol.len) |k| try moves.append(c.step(corner_orient_sol.moves[k]));
+    log("solving bottom corners", .{});
+    const corner_idx = c.getCornerIndex() orelse return error.UnsolvableCorners;
+    const corner_sol = tables.corner_solution[corner_idx];
+    if (corner_sol.len == 255) return error.UnsolvableCorners;
+    log("-> found solution with {d} moves", .{corner_sol.len});
+    for (0..corner_sol.len) |k| try moves.append(c.step(corner_sol.moves[k]));
     log("--------------------------------------------------", .{});
 
     if (!c.isSolved()) return error.UnsolvableCube;

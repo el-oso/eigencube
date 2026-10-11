@@ -347,64 +347,27 @@ test "comptime corner commutators form A4 subgroup" {
     try std.testing.expect(res.unique == 8);
 }
 
-test "comptime corner pos solution table solves all 12 A4 states" {
+test "comptime corner solution table solves all 324 reachable states" {
     const tables_local = eigencube.tables;
-    const BOT_CORNERS = eigencube.BOT_CORNERS;
-    const corner_table = tables_local.corner_pos_solution;
+    const corner_table = tables_local.corner_solution;
 
-    // Verify all 12 reachable states are present in tables.corner_pos_solution
+    // Verify all 324 reachable states are present in tables.corner_solution
     var count_reachable: usize = 0;
     for (corner_table) |sol| {
         if (sol.len != 255) count_reachable += 1;
     }
-    try std.testing.expectEqual(12, count_reachable);
+    try std.testing.expectEqual(324, count_reachable);
 
-    // Verify round-trip solution on all 12 reachable states of the production table
-    for (corner_table) |sol| {
-        if (sol.len == 255) continue;
-        // Invert sol.moves to create the scrambled state from SOLVED
-        var state = FastCube.SOLVED;
-        var k = sol.len;
-        while (k > 0) : (k -= 1) {
-            state = state.applyMove(sol.moves[k - 1] ^ 1);
-        }
-        // Now apply sol.moves to state
-        for (0..sol.len) |idx| {
-            state = state.applyMove(sol.moves[idx]);
-        }
-        // Verify all 4 bottom corners are position-solved using isCubeletPosSolved directly
-        for (BOT_CORNERS) |ci| {
-            const rot = tables_local.rotations[state.data[ci]];
-            try std.testing.expect(eigencube.isCubeletPosSolved(CUBELETS[ci], rot));
-        }
-        // And verify 17 top+mid and 4 bottom edges remain solved
-        for (eigencube.TOP_CUBELETS) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
-        for (MID_LAYER) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
-        for (eigencube.BOT_EDGES) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
-    }
-}
-
-test "comptime corner orient solution table solves all 27 orientation states" {
-    const tables_local = eigencube.tables;
-    const orient_table = tables_local.corner_orient_solution;
-
-    // Verify all 27 reachable states are present in tables.corner_orient_solution
-    var count_reachable: usize = 0;
-    for (orient_table) |sol| {
-        if (sol.len != 255) count_reachable += 1;
-    }
-    try std.testing.expectEqual(27, count_reachable);
-
-    // Verify round-trip solution on all 27 reachable states of the production table
-    for (orient_table, 0..) |sol, expected_idx| {
+    // Verify round-trip solution on all 324 reachable states of the production table
+    for (corner_table, 0..) |sol, expected_idx| {
         try std.testing.expect(sol.len != 255);
         var state = FastCube.SOLVED;
         var k = sol.len;
         while (k > 0) : (k -= 1) {
             state = state.applyMove(sol.moves[k - 1] ^ 1);
         }
-        // Verify state has the expected orientation index before solving
-        try std.testing.expectEqual(expected_idx, state.getCornerOrientIndex().?);
+        // Verify state has the expected corner index before solving
+        try std.testing.expectEqual(expected_idx, state.getCornerIndex().?);
 
         // Apply sol.moves to state
         for (0..sol.len) |idx| {
@@ -439,25 +402,11 @@ test "comptime zobrist_diff and is_bottom_down mathematical invariants" {
     }
 }
 
-test "tables.corner_pos_solution rejects unreachable corner codes" {
-    // A single transposition of bottom corners (0 <-> 1, 2, 3 fixed) has code:
-    // (1 << 0) | (0 << 2) | (2 << 4) | (3 << 6) = 225.
-    // Since (1, 0, 2, 3) has odd parity, it is not in the alternating group A4.
-    const odd_code = (1 << 0) | (0 << 2) | (2 << 4) | (3 << 6);
-    try std.testing.expectEqual(@as(u8, 255), tables.corner_pos_solution[odd_code].len);
-
-    // Verify all 244 unreachable slots in tables.corner_pos_solution have len == 255
-    var unreachable_count: usize = 0;
-    for (tables.corner_pos_solution) |sol| {
-        if (sol.len == 255) unreachable_count += 1;
-    }
-    try std.testing.expectEqual(256 - 12, unreachable_count);
-}
-
-test "getCornerOrientIndex rejects invalid twist parity" {
+test "getCornerIndex rejects invalid corner states" {
     var fc = FastCube.SOLVED;
+    // Corrupt corner twist
     fc.data[eigencube.BOT_CORNERS[0]] = 1;
-    try std.testing.expectEqual(@as(?usize, null), fc.getCornerOrientIndex());
+    try std.testing.expectEqual(@as(?usize, null), fc.getCornerIndex());
 }
 
 test "tables.edge_solution covers all 192 states and rejects unreachable states" {
