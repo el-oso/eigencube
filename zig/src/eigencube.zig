@@ -92,7 +92,6 @@ pub const SOLVED_CUBE: Cube = init_s: {
 pub const TOP_EDGES = [_]usize{ 5, 11, 16, 22 };
 pub const TOP_CUBELETS = [_]usize{ 2, 5, 8, 11, 13, 16, 19, 22, 25 };
 pub const MID_CUBELETS = [_]usize{ 1, 2, 4, 5, 7, 8, 10, 11, 13, 15, 16, 18, 19, 21, 22, 24, 25 };
-pub const MID_LAYER = [_]usize{ 1, 4, 7, 10, 15, 18, 21, 24 };
 pub const BOT_EDGES = [_]usize{ 3, 9, 14, 20 };
 pub const BOT_CORNERS = [_]usize{ 0, 6, 17, 23 };
 pub const NON_BOT_CORNERS = [_]usize{ 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25 };
@@ -149,9 +148,7 @@ pub const Tables = struct {
     rotations: [24]Mat3,
     transition: [12][26][24]u8,
     sqrt_dist_solved: [26][24]f32,
-    sqrt_dist_pos: [26][24]f32,
     is_solved: [26][24]bool,
-    is_pos_solved: [26][24]bool,
     prune_move: [13][12]bool,
     zobrist: [26][24]u64,
     zobrist_diff: [12][26][24]u64,
@@ -198,11 +195,7 @@ pub const Tables = struct {
 
         var sqrt_dist_solved: [26][24]f32 = undefined;
         var is_solved: [26][24]bool = undefined;
-        var sqrt_dist_pos: [26][24]f32 = undefined;
-        var is_pos_solved: [26][24]bool = undefined;
-
         computeDistanceTable(&rotations, &rot_trans, isCubeletSolved, &sqrt_dist_solved, &is_solved);
-        computeDistanceTable(&rotations, &rot_trans, isCubeletPosSolved, &sqrt_dist_pos, &is_pos_solved);
 
         var prune_move: [13][12]bool = undefined;
         for (&prune_move) |*row| @memset(row, false);
@@ -288,7 +281,7 @@ pub const Tables = struct {
             }
         }
 
-        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .sqrt_dist_pos = sqrt_dist_pos, .is_solved = is_solved, .is_pos_solved = is_pos_solved, .prune_move = prune_move, .zobrist = zobrist, .zobrist_diff = zobrist_diff, .is_bottom_down = is_bottom_down, .corner_solution = corner_solution };
+        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .is_solved = is_solved, .prune_move = prune_move, .zobrist = zobrist, .zobrist_diff = zobrist_diff, .is_bottom_down = is_bottom_down, .corner_solution = corner_solution };
     }
 };
 
@@ -756,10 +749,9 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
     try solvePhase(allocator, &bufs, "solving bottom cross", 8, 0.25, crossDone, HCross.h, &c, &moves);
     log("positioning bottom corners", .{});
     const corner_sol = tables.corner_solution[c.getCornerCode()];
-    if (corner_sol.len < 255) {
-        log("-> found solution with {d} moves", .{corner_sol.len});
-        for (0..corner_sol.len) |k| try moves.append(c.step(corner_sol.moves[k]));
-    }
+    if (corner_sol.len == 255) return error.UnsolvableCorners;
+    log("-> found solution with {d} moves", .{corner_sol.len});
+    for (0..corner_sol.len) |k| try moves.append(c.step(corner_sol.moves[k]));
     log("--------------------------------------------------", .{});
     try solveEndgame(&c, &moves);
 

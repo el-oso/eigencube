@@ -15,6 +15,7 @@ const isCubeletSolved = eigencube.isCubeletSolved;
 const astar = eigencube.astar;
 const shuffle = eigencube.shuffle;
 const solve = eigencube.solve;
+const MID_LAYER = [_]usize{ 1, 4, 7, 10, 15, 18, 21, 24 };
 
 fn cross(a: Vec3, b: Vec3) Vec3 {
     return .{
@@ -47,7 +48,6 @@ test "counts and group size" {
     for (0..26) |c_idx| {
         for (0..24) |r_idx| {
             try std.testing.expect(tables.sqrt_dist_solved[c_idx][r_idx] <= 1.733);
-            try std.testing.expect(tables.sqrt_dist_pos[c_idx][r_idx] <= 1.733);
         }
     }
 }
@@ -308,7 +308,7 @@ test "comptime corner commutators form A4 subgroup" {
                         break;
                     };
                     if (!preserves) continue;
-                    for (eigencube.MID_LAYER) |i| if (!tables.is_solved[i][cube.data[i]]) {
+                    for (MID_LAYER) |i| if (!tables.is_solved[i][cube.data[i]]) {
                         preserves = false;
                         break;
                     };
@@ -348,123 +348,22 @@ test "comptime corner commutators form A4 subgroup" {
 }
 
 test "comptime corner solution table solves all 12 A4 states" {
-    const CornerSol = struct { len: u8, moves: [16]u8 };
     const tables_local = eigencube.tables;
     const BOT_CORNERS = eigencube.BOT_CORNERS;
+    const corner_table = tables_local.corner_solution;
 
-    const corner_table = comptime blk: {
-        @setEvalBranchQuota(500_000);
-        var table = [_]CornerSol{.{ .len = 255, .moves = undefined }} ** 256;
-
-        const get_code = struct {
-            fn call(cube: FastCube) u8 {
-                var code: u8 = 0;
-                for (BOT_CORNERS, 0..) |ci, idx| {
-                    const rot = tables_local.rotations[cube.data[ci]];
-                    const pos = rot.mulVec(CUBELETS[ci]);
-                    for (BOT_CORNERS, 0..) |target_ci, target_idx| {
-                        if (CUBELETS[target_ci].eql(pos)) {
-                            code |= @as(u8, @intCast(target_idx)) << @as(u3, @intCast(idx * 2));
-                            break;
-                        }
-                    }
-                }
-                return code;
-            }
-        }.call;
-
-        var commutators: [24][8]u8 = undefined;
-        var comm_cnt: usize = 0;
-        for (0..12) |a| {
-            for (0..12) |b| {
-                for (0..12) |c| {
-                    const seq = [8]u8{ @intCast(a), @intCast(b), @intCast(a ^ 1), @intCast(c), @intCast(a), @intCast(b ^ 1), @intCast(a ^ 1), @intCast(c ^ 1) };
-                    var cube = FastCube.SOLVED;
-                    for (seq) |m| cube = cube.applyMove(m);
-
-                    var preserves = true;
-                    for (eigencube.TOP_CUBELETS) |i| if (!tables_local.is_solved[i][cube.data[i]]) {
-                        preserves = false;
-                        break;
-                    };
-                    if (!preserves) continue;
-                    for (eigencube.MID_LAYER) |i| if (!tables_local.is_solved[i][cube.data[i]]) {
-                        preserves = false;
-                        break;
-                    };
-                    if (!preserves) continue;
-                    for (eigencube.BOT_EDGES) |i| if (!tables_local.is_solved[i][cube.data[i]]) {
-                        preserves = false;
-                        break;
-                    };
-                    if (!preserves) continue;
-
-                    const code = get_code(cube);
-                    if (code != get_code(FastCube.SOLVED)) {
-                        commutators[comm_cnt] = seq;
-                        comm_cnt += 1;
-                    }
-                }
-            }
-        }
-
-        const solved_code = get_code(FastCube.SOLVED);
-        table[solved_code] = .{ .len = 0, .moves = [_]u8{0} ** 16 };
-
-        var queue_cube: [12]FastCube = undefined;
-        var queue_moves: [12][16]u8 = undefined;
-        var queue_lens: [12]u8 = undefined;
-        queue_cube[0] = FastCube.SOLVED;
-        queue_lens[0] = 0;
-        var q_len: usize = 1;
-        var q_head: usize = 0;
-
-        while (q_head < q_len) : (q_head += 1) {
-            const curr = queue_cube[q_head];
-            const curr_len = queue_lens[q_head];
-            const curr_moves = queue_moves[q_head];
-            if (curr_len >= 16) continue;
-
-            for (commutators) |comm| {
-                var nxt = curr;
-                for (comm) |m| nxt = nxt.applyMove(m);
-                const code = get_code(nxt);
-                if (table[code].len == 255) {
-                    const new_len = curr_len + 8;
-                    var forward_moves: [16]u8 = undefined;
-                    for (0..curr_len) |k| forward_moves[k] = curr_moves[k];
-                    for (0..8) |k| forward_moves[curr_len + k] = comm[k];
-
-                    var sol_moves: [16]u8 = undefined;
-                    for (0..new_len) |k| sol_moves[k] = forward_moves[new_len - 1 - k] ^ 1;
-                    table[code] = .{ .len = new_len, .moves = sol_moves };
-
-                    queue_cube[q_len] = nxt;
-                    queue_lens[q_len] = new_len;
-                    queue_moves[q_len] = forward_moves;
-                    q_len += 1;
-                }
-            }
-        }
-
-        break :blk table;
-    };
-
-    // Verify all 12 reachable states are solved!
+    // Verify all 12 reachable states are present in tables.corner_solution
     var count_reachable: usize = 0;
     for (corner_table) |sol| {
-        if (sol.len != 255) {
-            count_reachable += 1;
-        }
+        if (sol.len != 255) count_reachable += 1;
     }
-    try std.testing.expect(count_reachable == 12);
+    try std.testing.expectEqual(12, count_reachable);
 
-    // Verify round-trip solution on all 12 states
+    // Verify round-trip solution on all 12 reachable states of the production table
     for (corner_table) |sol| {
         if (sol.len == 255) continue;
         // Invert sol.moves to create the scrambled state from SOLVED
         var state = FastCube.SOLVED;
-        // Inverting sol.moves: reverse and flip direction
         var k = sol.len;
         while (k > 0) : (k -= 1) {
             state = state.applyMove(sol.moves[k - 1] ^ 1);
@@ -473,13 +372,14 @@ test "comptime corner solution table solves all 12 A4 states" {
         for (0..sol.len) |idx| {
             state = state.applyMove(sol.moves[idx]);
         }
-        // Verify all 4 corners are now position-solved!
+        // Verify all 4 bottom corners are position-solved using isCubeletPosSolved directly
         for (BOT_CORNERS) |ci| {
-            try std.testing.expect(tables_local.is_pos_solved[ci][state.data[ci]]);
+            const rot = tables_local.rotations[state.data[ci]];
+            try std.testing.expect(eigencube.isCubeletPosSolved(CUBELETS[ci], rot));
         }
-        // And verify 17 top+mid and 4 bottom edges are still solved!
+        // And verify 17 top+mid and 4 bottom edges remain solved
         for (eigencube.TOP_CUBELETS) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
-        for (eigencube.MID_LAYER) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
+        for (MID_LAYER) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
         for (eigencube.BOT_EDGES) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
     }
 }
