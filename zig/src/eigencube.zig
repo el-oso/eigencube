@@ -167,6 +167,33 @@ pub const A4_MAP: [256]u8 = init: {
     break :init map;
 };
 
+pub fn cornerIndexFromRotations(c_rots: [4]u8, slot_tab: *const [4][24]u8, orient_tab: *const [4][24]u8) ?usize {
+    var p_code: usize = 0;
+    var orients: [4]usize = undefined;
+    var slot_mask: u4 = 0;
+
+    inline for (0..4) |idx| {
+        const r = c_rots[idx];
+        if (r >= 24) return null;
+        const target_slot = slot_tab[idx][r];
+        if (target_slot == 255) return null;
+        const bit: u4 = @as(u4, 1) << @as(u2, @intCast(target_slot));
+        if ((slot_mask & bit) != 0) return null;
+        slot_mask |= bit;
+
+        p_code |= @as(usize, target_slot) << @as(u3, @intCast(idx * 2));
+        orients[idx] = orient_tab[idx][r];
+    }
+
+    const p_idx = A4_MAP[p_code];
+    if (p_idx == 255) return null;
+
+    if ((orients[0] + orients[1] + orients[2] + orients[3]) % 3 != 0) return null;
+
+    const o_idx = orients[0] + 3 * orients[1] + 9 * orients[2];
+    return @as(usize, p_idx) * 27 + o_idx;
+}
+
 pub const Tables = struct {
     rotations: [24]Mat3,
     transition: [12][26][24]u8,
@@ -322,34 +349,6 @@ pub const Tables = struct {
             }
         }
 
-        const computeCornerIndex = struct {
-            fn get(c_rots: [4]u8, slot_tab: *const [4][24]u8, orient_tab: *const [4][24]u8) ?usize {
-                var p_code: usize = 0;
-                var orients: [4]usize = undefined;
-                var slot_mask: u4 = 0;
-
-                inline for (0..4) |idx| {
-                    const r = c_rots[idx];
-                    const target_slot = slot_tab[idx][r];
-                    if (target_slot == 255) return null;
-                    const bit: u4 = @as(u4, 1) << @as(u2, @intCast(target_slot));
-                    if ((slot_mask & bit) != 0) return null;
-                    slot_mask |= bit;
-
-                    p_code |= @as(usize, target_slot) << @as(u3, @intCast(idx * 2));
-                    orients[idx] = orient_tab[idx][r];
-                }
-
-                const p_idx = A4_MAP[p_code];
-                if (p_idx == 255) return null;
-
-                if ((orients[0] + orients[1] + orients[2] + orients[3]) % 3 != 0) return null;
-
-                const o_idx = orients[0] + 3 * orients[1] + 9 * orients[2];
-                return @as(usize, p_idx) * 27 + o_idx;
-            }
-        }.get;
-
         var parent_state = [_]u16{0} ** 324;
         var parent_gen = [_]u8{0} ** 324;
 
@@ -388,7 +387,7 @@ pub const Tables = struct {
                     gen_rot_trans[g_idx][2][curr_rots[2]],
                     gen_rot_trans[g_idx][3][curr_rots[3]],
                 };
-                const maybe_idx = computeCornerIndex(nxt_rots, &corner_slot, &corner_orient);
+                const maybe_idx = cornerIndexFromRotations(nxt_rots, &corner_slot, &corner_orient);
                 if (maybe_idx) |idx| {
                     if (corner_solution[idx].len == 255) {
                         const next_len = curr_len + gen.len;
@@ -586,36 +585,21 @@ pub const FastCube = struct {
     }
 
     pub fn getCornerIndex(self: FastCube) ?usize {
-        var p_code: usize = 0;
-        var orients = [_]usize{0} ** 4;
-        var slot_mask: u4 = 0;
-
-        for (BOT_CORNERS, 0..) |slot_ci, idx| {
-            const r = self.data[slot_ci];
-            const target_slot = tables.corner_slot[idx][r];
-            if (target_slot == 255) return null;
-            const bit: u4 = @as(u4, 1) << @as(u2, @intCast(target_slot));
-            if ((slot_mask & bit) != 0) return null;
-            slot_mask |= bit;
-
-            p_code |= @as(usize, target_slot) << @as(u3, @intCast(idx * 2));
-            orients[idx] = tables.corner_orient[idx][r];
-        }
-
-        const p_idx = A4_MAP[p_code];
-        if (p_idx == 255) return null;
-
-        const sum_o = orients[0] + orients[1] + orients[2] + orients[3];
-        if (sum_o % 3 != 0) return null;
-
-        const o_idx = orients[0] + 3 * orients[1] + 9 * orients[2];
-        return @as(usize, p_idx) * 27 + o_idx;
+        const c_rots = [4]u8{
+            self.data[BOT_CORNERS[0]],
+            self.data[BOT_CORNERS[1]],
+            self.data[BOT_CORNERS[2]],
+            self.data[BOT_CORNERS[3]],
+        };
+        return cornerIndexFromRotations(c_rots, &tables.corner_slot, &tables.corner_orient);
     }
 
     pub fn getEdgeCode(self: FastCube) ?u12 {
         var code: u12 = 0;
         for (BOT_EDGES, 0..) |slot_ci, slot_idx| {
-            const pos = tables.rotations[self.data[slot_ci]].mulVec(CUBELETS[slot_ci]);
+            const r = self.data[slot_ci];
+            if (r >= 24) return null;
+            const pos = tables.rotations[r].mulVec(CUBELETS[slot_ci]);
             var found = false;
             var piece_idx: u12 = 0;
             for (BOT_EDGES, 0..) |target_ci, target_idx| {
@@ -626,7 +610,7 @@ pub const FastCube = struct {
                 }
             }
             if (!found) return null;
-            const is_down: u12 = if (tables.is_bottom_down[self.data[slot_ci]]) 1 else 0;
+            const is_down: u12 = if (tables.is_bottom_down[r]) 1 else 0;
             code |= (piece_idx | (is_down << 2)) << @as(u4, @intCast(slot_idx * 3));
         }
         return code;
