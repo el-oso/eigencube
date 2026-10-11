@@ -94,7 +94,6 @@ pub const TOP_CUBELETS = [_]usize{ 2, 5, 8, 11, 13, 16, 19, 22, 25 };
 pub const MID_CUBELETS = [_]usize{ 1, 2, 4, 5, 7, 8, 10, 11, 13, 15, 16, 18, 19, 21, 22, 24, 25 };
 pub const BOT_EDGES = [_]usize{ 3, 9, 14, 20 };
 pub const BOT_CORNERS = [_]usize{ 0, 6, 17, 23 };
-pub const NON_BOT_CORNERS = [_]usize{ 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25 };
 
 pub fn isCubeletSolved(c: Vec3, r: Mat3) bool {
     return (r.mulMat(Mat3.diag(c))).eql(Mat3.diag(c));
@@ -143,6 +142,7 @@ fn computeDistanceTable(
 }
 
 pub const CornerSolution = struct { len: u8, moves: [16]u8 };
+pub const EdgeSolution = struct { len: u8, moves: [30]u8 };
 
 pub const Tables = struct {
     rotations: [24]Mat3,
@@ -154,9 +154,10 @@ pub const Tables = struct {
     zobrist_diff: [12][26][24]u64,
     is_bottom_down: [24]bool,
     corner_solution: [256]CornerSolution,
+    edge_solution: [4096]EdgeSolution,
 
     pub fn init() Tables {
-        @setEvalBranchQuota(500_000);
+        @setEvalBranchQuota(5_000_000);
         var rotations: [24]Mat3 = undefined;
         rotations[0] = Mat3.id;
         var rot_len: usize = 1;
@@ -281,7 +282,96 @@ pub const Tables = struct {
             }
         }
 
-        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .is_solved = is_solved, .prune_move = prune_move, .zobrist = zobrist, .zobrist_diff = zobrist_diff, .is_bottom_down = is_bottom_down, .corner_solution = corner_solution };
+        var edge_solution = [_]EdgeSolution{.{ .len = 255, .moves = undefined }} ** 4096;
+        const EDGE_GENERATORS = [12]struct { len: usize, m: [8]u8 }{
+            .{ .len = 1, .m = .{ 4, 0, 0, 0, 0, 0, 0, 0 } },
+            .{ .len = 1, .m = .{ 5, 0, 0, 0, 0, 0, 0, 0 } },
+            .{ .len = 6, .m = .{ 0, 2, 4, 3, 5, 1, 0, 0 } },
+            .{ .len = 6, .m = .{ 3, 1, 5, 0, 4, 2, 0, 0 } },
+            .{ .len = 6, .m = .{ 2, 10, 4, 11, 5, 3, 0, 0 } },
+            .{ .len = 6, .m = .{ 11, 3, 5, 2, 4, 10, 0, 0 } },
+            .{ .len = 8, .m = .{ 0, 4, 1, 4, 0, 4, 4, 1 } },
+            .{ .len = 8, .m = .{ 1, 5, 0, 5, 1, 5, 5, 0 } },
+            .{ .len = 8, .m = .{ 2, 4, 3, 4, 2, 4, 4, 3 } },
+            .{ .len = 8, .m = .{ 3, 5, 2, 5, 3, 5, 5, 2 } },
+            .{ .len = 8, .m = .{ 10, 4, 11, 4, 10, 4, 4, 11 } },
+            .{ .len = 8, .m = .{ 11, 5, 10, 5, 11, 5, 5, 10 } },
+        };
+
+        const computeEdgeCode = struct {
+            fn get(data: [26]u8, rots: *const [24]Mat3, is_bot_down: *const [24]bool) ?u12 {
+                var code: u12 = 0;
+                for (BOT_EDGES, 0..) |slot_ci, slot_idx| {
+                    const rot = rots[data[slot_ci]];
+                    const pos = rot.mulVec(CUBELETS[slot_ci]);
+                    var found = false;
+                    var piece_idx: u12 = 0;
+                    for (BOT_EDGES, 0..) |target_ci, target_idx| {
+                        if (CUBELETS[target_ci].eql(pos)) {
+                            piece_idx = @intCast(target_idx);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) return null;
+                    const is_down: u12 = if (is_bot_down[data[slot_ci]]) 1 else 0;
+                    code |= (piece_idx | (is_down << 2)) << @as(u4, @intCast(slot_idx * 3));
+                }
+                return code;
+            }
+        }.get;
+
+        var edge_q_cubes: [192][26]u8 = undefined;
+        var edge_q_lens: [192]usize = undefined;
+        var edge_q_moves: [192][30]u8 = undefined;
+
+        var solved_data: [26]u8 = undefined;
+        for (CUBELETS, 0..) |c, ci| {
+            for (rotations, 0..) |r, ri| {
+                if (isCubeletSolved(c, r)) {
+                    solved_data[ci] = @intCast(ri);
+                    break;
+                }
+            }
+        }
+
+        const start_edge_code = computeEdgeCode(solved_data, &rotations, &is_bottom_down).?;
+        edge_solution[start_edge_code] = .{ .len = 0, .moves = [_]u8{0} ** 30 };
+        edge_q_cubes[0] = solved_data;
+        edge_q_lens[0] = 0;
+        var eq_len: usize = 1;
+        var eq_head: usize = 0;
+
+        while (eq_head < eq_len) : (eq_head += 1) {
+            const curr = edge_q_cubes[eq_head];
+            const curr_len = edge_q_lens[eq_head];
+            const curr_m = edge_q_moves[eq_head];
+
+            for (EDGE_GENERATORS) |gen| {
+                var nxt = curr;
+                for (0..gen.len) |k| {
+                    const m = gen.m[k];
+                    var step_c: [26]u8 = undefined;
+                    for (0..26) |j| step_c[j] = transition[m][j][nxt[j]];
+                    nxt = step_c;
+                }
+                const code = computeEdgeCode(nxt, &rotations, &is_bottom_down).?;
+                if (edge_solution[code].len == 255) {
+                    const next_len = curr_len + gen.len;
+                    var sol_moves: [30]u8 = undefined;
+                    for (0..gen.len) |k| sol_moves[k] = @intCast(gen.m[gen.len - 1 - k] ^ 1);
+                    for (0..curr_len) |k| sol_moves[gen.len + k] = curr_m[k];
+
+                    edge_solution[code] = .{ .len = @intCast(next_len), .moves = sol_moves };
+                    edge_q_cubes[eq_len] = nxt;
+                    edge_q_lens[eq_len] = next_len;
+                    edge_q_moves[eq_len] = sol_moves;
+                    eq_len += 1;
+                }
+            }
+        }
+
+        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .is_solved = is_solved, .prune_move = prune_move, .zobrist = zobrist, .zobrist_diff = zobrist_diff, .is_bottom_down = is_bottom_down, .corner_solution = corner_solution, .edge_solution = edge_solution };
     }
 };
 
@@ -368,6 +458,26 @@ pub const FastCube = struct {
                 }
             }
             if (!found) return null;
+        }
+        return code;
+    }
+
+    pub fn getEdgeCode(self: FastCube) ?u12 {
+        var code: u12 = 0;
+        for (BOT_EDGES, 0..) |slot_ci, slot_idx| {
+            const pos = tables.rotations[self.data[slot_ci]].mulVec(CUBELETS[slot_ci]);
+            var found = false;
+            var piece_idx: u12 = 0;
+            for (BOT_EDGES, 0..) |target_ci, target_idx| {
+                if (CUBELETS[target_ci].eql(pos)) {
+                    piece_idx = @intCast(target_idx);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return null;
+            const is_down: u12 = if (tables.is_bottom_down[self.data[slot_ci]]) 1 else 0;
+            code |= (piece_idx | (is_down << 2)) << @as(u4, @intCast(slot_idx * 3));
         }
         return code;
     }
@@ -650,16 +760,6 @@ fn topDone(i: usize, c: *const FastCube) bool {
         countSolved(c, &MID_CUBELETS) >= @min(17, i + 1);
 }
 
-fn crossDone(i: usize, c: *const FastCube) bool {
-    if (!topDone(16, c)) return false;
-    var ok: usize = 0;
-    inline for (BOT_EDGES) |j| if (tables.is_bottom_down[c.data[j]]) {
-        ok += 1;
-    };
-    const req_bot = if (i >= 3) @min(4, i - 3) else 0;
-    return ok >= @min(4, i + 1) and countSolved(c, &BOT_EDGES) >= req_bot;
-}
-
 fn cornerOriented(c: usize, r_init: usize, bot: usize) bool {
     var r = r_init;
     for (0..4) |_| {
@@ -744,14 +844,14 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
             return state.layerH(s, &tables.sqrt_dist_solved, if (idx < 9) 8.0 else 4.0);
         }
     };
-    const HCross = struct {
-        fn h(_: usize, state: *const FastCube) f64 {
-            return state.layerH(NON_BOT_CORNERS[0..], &tables.sqrt_dist_solved, 3.0);
-        }
-    };
-
     try solvePhase(allocator, &bufs, "solving cubelet", 17, 0.25, topDone, H1.h, &c, &moves);
-    try solvePhase(allocator, &bufs, "solving bottom cross", 8, 0.25, crossDone, HCross.h, &c, &moves);
+    log("positioning bottom cross", .{});
+    const edge_code = c.getEdgeCode() orelse return error.UnsolvableEdges;
+    const edge_sol = tables.edge_solution[edge_code];
+    if (edge_sol.len == 255) return error.UnsolvableEdges;
+    log("-> found solution with {d} moves", .{edge_sol.len});
+    for (0..edge_sol.len) |k| try moves.append(c.step(edge_sol.moves[k]));
+    log("--------------------------------------------------", .{});
     log("positioning bottom corners", .{});
     const corner_code = c.getCornerCode() orelse return error.UnsolvableCorners;
     const corner_sol = tables.corner_solution[corner_code];

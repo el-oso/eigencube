@@ -423,6 +423,30 @@ test "tables.corner_solution rejects unreachable corner codes" {
     try std.testing.expectEqual(256 - 12, unreachable_count);
 }
 
+test "tables.edge_solution covers all 192 states and rejects unreachable states" {
+    var reachable_count: usize = 0;
+    var unreachable_count: usize = 0;
+    for (tables.edge_solution) |sol| {
+        if (sol.len != 255) {
+            reachable_count += 1;
+        } else {
+            unreachable_count += 1;
+        }
+    }
+    try std.testing.expectEqual(192, reachable_count);
+    try std.testing.expectEqual(4096 - 192, unreachable_count);
+}
+
+test "solve returns error on unsolvable edge state" {
+    var fc = FastCube.SOLVED;
+    // Corrupt one bottom edge orientation so it has invalid parity
+    fc.data[eigencube.BOT_EDGES[0]] = 1;
+
+    const invalid_cube = fc.toCube();
+    const res = solve(std.testing.allocator, invalid_cube);
+    try std.testing.expectError(error.UnsolvableEdges, res);
+}
+
 test "solve returns error on unsolvable corner state" {
     var fc = FastCube.SOLVED;
     fc.data[eigencube.BOT_CORNERS[0]] = 1;
