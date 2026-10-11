@@ -290,9 +290,11 @@ test "min heap push with zero initial capacity" {
 }
 
 test "comptime corner commutators form A4 subgroup" {
-    const count_3cycles = comptime blk: {
+    const res = comptime blk: {
         @setEvalBranchQuota(500_000);
         var count: usize = 0;
+        var unique: usize = 0;
+        var seen: [256]bool = [_]bool{false} ** 256;
         for (0..12) |a| {
             for (0..12) |b| {
                 for (0..12) |c| {
@@ -330,11 +332,17 @@ test "comptime corner commutators form A4 subgroup" {
                     }
                     if (perms[0] != 0 or perms[1] != 1 or perms[2] != 2 or perms[3] != 3) {
                         count += 1;
+                        const code = perms[0] + perms[1] * 4 + perms[2] * 16 + perms[3] * 64;
+                        if (!seen[code]) {
+                            seen[code] = true;
+                            unique += 1;
+                        }
                     }
                 }
             }
         }
-        break :blk count;
+        break :blk .{ .total = count, .unique = unique };
     };
-    try std.testing.expect(count_3cycles == 24);
+    try std.testing.expect(res.total == 24);
+    try std.testing.expect(res.unique == 8);
 }
