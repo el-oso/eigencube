@@ -143,6 +143,8 @@ fn computeDistanceTable(
     }
 }
 
+pub const CornerSolution = struct { len: u8, moves: [16]u8 };
+
 pub const Tables = struct {
     rotations: [24]Mat3,
     transition: [12][26][24]u8,
@@ -152,9 +154,12 @@ pub const Tables = struct {
     is_pos_solved: [26][24]bool,
     prune_move: [13][12]bool,
     zobrist: [26][24]u64,
+    zobrist_diff: [12][26][24]u64,
+    is_bottom_down: [24]bool,
+    corner_solution: [256]CornerSolution,
 
     pub fn init() Tables {
-        @setEvalBranchQuota(200_000);
+        @setEvalBranchQuota(500_000);
         var rotations: [24]Mat3 = undefined;
         rotations[0] = Mat3.id;
         var rot_len: usize = 1;
@@ -221,7 +226,69 @@ pub const Tables = struct {
             }
         }
 
-        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .sqrt_dist_pos = sqrt_dist_pos, .is_solved = is_solved, .is_pos_solved = is_pos_solved, .prune_move = prune_move, .zobrist = zobrist };
+        var is_bottom_down: [24]bool = undefined;
+        const down_vec = Vec3{ .x = 0, .y = 0, .z = -1 };
+        for (rotations, 0..) |r, r_idx| is_bottom_down[r_idx] = r.mulVec(down_vec).eql(down_vec);
+
+        var zobrist_diff: [12][26][24]u64 = undefined;
+        for (0..12) |m| {
+            for (0..26) |c| {
+                for (0..24) |r| {
+                    const nxt_r = transition[m][c][r];
+                    zobrist_diff[m][c][r] = if (nxt_r != r) (zobrist[c][r] ^ zobrist[c][nxt_r]) else 0;
+                }
+            }
+        }
+
+        var corner_solution = [_]CornerSolution{.{ .len = 255, .moves = undefined }} ** 256;
+        const GENERATORS = [8]struct { p: [4]u8, m: [8]u8 }{
+            .{ .p = .{ 1, 3, 2, 0 }, .m = .{ 0, 2, 1, 8, 0, 3, 1, 9 } },
+            .{ .p = .{ 0, 3, 1, 2 }, .m = .{ 0, 3, 1, 8, 0, 2, 1, 9 } },
+            .{ .p = .{ 2, 1, 3, 0 }, .m = .{ 1, 8, 0, 3, 1, 9, 0, 2 } },
+            .{ .p = .{ 2, 0, 1, 3 }, .m = .{ 1, 9, 0, 3, 1, 8, 0, 2 } },
+            .{ .p = .{ 1, 2, 0, 3 }, .m = .{ 2, 10, 3, 0, 2, 11, 3, 1 } },
+            .{ .p = .{ 0, 2, 3, 1 }, .m = .{ 3, 0, 2, 11, 3, 1, 2, 10 } },
+            .{ .p = .{ 3, 0, 2, 1 }, .m = .{ 4, 10, 5, 1, 4, 11, 5, 0 } },
+            .{ .p = .{ 3, 1, 0, 2 }, .m = .{ 5, 9, 4, 2, 5, 8, 4, 3 } },
+        };
+
+        corner_solution[228] = .{ .len = 0, .moves = [_]u8{0} ** 16 };
+        var queue_p: [12][4]u8 = undefined;
+        var queue_moves: [12][16]u8 = undefined;
+        var queue_lens: [12]u8 = undefined;
+        queue_p[0] = .{ 0, 1, 2, 3 };
+        queue_lens[0] = 0;
+        var q_len: usize = 1;
+        var q_head: usize = 0;
+
+        while (q_head < q_len) : (q_head += 1) {
+            const curr_p = queue_p[q_head];
+            const curr_len = queue_lens[q_head];
+            const curr_moves = queue_moves[q_head];
+            if (curr_len >= 16) continue;
+
+            for (GENERATORS) |gen| {
+                const nxt_p = [4]u8{ gen.p[curr_p[0]], gen.p[curr_p[1]], gen.p[curr_p[2]], gen.p[curr_p[3]] };
+                const code = @as(usize, nxt_p[0]) | (@as(usize, nxt_p[1]) << 2) | (@as(usize, nxt_p[2]) << 4) | (@as(usize, nxt_p[3]) << 6);
+                if (corner_solution[code].len == 255) {
+                    const new_len = curr_len + 8;
+                    var fwd: [16]u8 = undefined;
+                    for (0..curr_len) |k| fwd[k] = curr_moves[k];
+                    for (0..8) |k| fwd[curr_len + k] = gen.m[k];
+
+                    var sol_moves: [16]u8 = undefined;
+                    for (0..new_len) |k| sol_moves[k] = fwd[new_len - 1 - k] ^ 1;
+                    corner_solution[code] = .{ .len = new_len, .moves = sol_moves };
+
+                    queue_p[q_len] = nxt_p;
+                    queue_lens[q_len] = new_len;
+                    queue_moves[q_len] = fwd;
+                    q_len += 1;
+                }
+            }
+        }
+
+        return .{ .rotations = rotations, .transition = transition, .sqrt_dist_solved = sqrt_dist_solved, .sqrt_dist_pos = sqrt_dist_pos, .is_solved = is_solved, .is_pos_solved = is_pos_solved, .prune_move = prune_move, .zobrist = zobrist, .zobrist_diff = zobrist_diff, .is_bottom_down = is_bottom_down, .corner_solution = corner_solution };
     }
 };
 
@@ -294,6 +361,21 @@ pub const FastCube = struct {
         const s = self.sumDist(indices, dist);
         return @as(f64, @floatCast((s * s) / div));
     }
+
+    pub fn getCornerCode(self: FastCube) u8 {
+        var code: u8 = 0;
+        for (BOT_CORNERS, 0..) |ci, idx| {
+            const rot = tables.rotations[self.data[ci]];
+            const pos = rot.mulVec(CUBELETS[ci]);
+            for (BOT_CORNERS, 0..) |target_ci, target_idx| {
+                if (CUBELETS[target_ci].eql(pos)) {
+                    code |= @as(u8, @intCast(target_idx)) << @as(u3, @intCast(idx * 2));
+                    break;
+                }
+            }
+        }
+        return code;
+    }
 };
 
 pub fn log(comptime fmt: []const u8, args: anytype) void {
@@ -317,8 +399,8 @@ pub const Rng = struct {
 
     pub fn randomGauss(self: *Rng, mean: f64, stdev: f64) f64 {
         var sum: f64 = 0;
-        for (0..12) |_| sum += self.nextF64();
-        return mean + stdev * (sum - 6.0);
+        inline for (0..4) |_| sum += self.nextF64();
+        return mean + stdev * ((sum - 2.0) * 1.7320508075688772);
     }
 };
 
@@ -511,13 +593,10 @@ pub fn astar(
                 const next_cost = node.cost + 1;
                 var next_hash = node.hash;
                 var dst: FastCube = undefined;
-                for (0..26) |i| {
+                inline for (0..26) |i| {
                     const prev_r = node.state.data[i];
-                    const next_r = tables.transition[m][i][prev_r];
-                    dst.data[i] = next_r;
-                    if (prev_r != next_r) {
-                        next_hash ^= tables.zobrist[i][prev_r] ^ tables.zobrist[i][next_r];
-                    }
+                    dst.data[i] = tables.transition[m][i][prev_r];
+                    next_hash ^= tables.zobrist_diff[m][i][prev_r];
                 }
                 const mv_code: u8 = @intCast(m + 1);
 
@@ -567,27 +646,23 @@ fn countSolved(c: *const FastCube, indices: []const usize) usize {
 }
 
 fn topDone(i: usize, c: *const FastCube) bool {
+    if (i == 16) {
+        inline for (MID_CUBELETS) |j| if (!tables.is_solved[j][c.data[j]]) return false;
+        return true;
+    }
     return countSolved(c, &TOP_EDGES) >= @min(4, i + 1) and
         countSolved(c, &TOP_CUBELETS) >= @min(9, i + 1) and
         countSolved(c, &MID_CUBELETS) >= @min(17, i + 1);
 }
 
 fn crossDone(i: usize, c: *const FastCube) bool {
-    const d = Vec3{ .x = 0, .y = 0, .z = -1 };
+    if (!topDone(16, c)) return false;
     var ok: usize = 0;
-    for (BOT_EDGES) |j| if (tables.rotations[c.data[j]].mulVec(d).eql(d)) {
+    inline for (BOT_EDGES) |j| if (tables.is_bottom_down[c.data[j]]) {
         ok += 1;
     };
     const req_bot = if (i >= 3) @min(4, i - 3) else 0;
-    return topDone(16, c) and ok >= @min(4, i + 1) and countSolved(c, &BOT_EDGES) >= req_bot;
-}
-
-fn cornersDone(i: usize, c: *const FastCube) bool {
-    var pos: usize = 0;
-    for (BOT_CORNERS) |j| if (tables.is_pos_solved[j][c.data[j]]) {
-        pos += 1;
-    };
-    return crossDone(7, c) and pos >= @min(4, i + 1);
+    return ok >= @min(4, i + 1) and countSolved(c, &BOT_EDGES) >= req_bot;
 }
 
 fn cornerOriented(c: usize, r_init: usize, bot: usize) bool {
@@ -662,7 +737,7 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
     errdefer moves.deinit();
     var c = FastCube.fromCube(&cube);
 
-    var bufs = try SearchBuffers.init(allocator, 65_536, 65_536);
+    var bufs = try SearchBuffers.init(allocator, 131_072, 131_072);
     defer bufs.deinit();
 
     const H1 = struct {
@@ -676,18 +751,16 @@ pub fn solve(allocator: std.mem.Allocator, cube: Cube) ![]Move {
             return state.layerH(NON_BOT_CORNERS[0..], &tables.sqrt_dist_solved, 3.0);
         }
     };
-    const HCorners = struct {
-        fn h(_: usize, state: *const FastCube) f64 {
-            const t_s = state.sumDist(TOP_CUBELETS[0..], &tables.sqrt_dist_solved);
-            const m_s = state.sumDist(MID_LAYER[0..], &tables.sqrt_dist_solved);
-            const b_s = state.sumDist(BOT_EDGES[0..], &tables.sqrt_dist_solved) + state.sumDist(BOT_CORNERS[0..], &tables.sqrt_dist_pos);
-            return @as(f64, @floatCast((t_s * t_s) / 5.0 + (m_s * m_s) / 3.0 + (b_s * b_s) / 8.0));
-        }
-    };
 
     try solvePhase(allocator, &bufs, "solving cubelet", 17, 0.25, topDone, H1.h, &c, &moves);
     try solvePhase(allocator, &bufs, "solving bottom cross", 8, 0.25, crossDone, HCross.h, &c, &moves);
-    try solvePhase(allocator, &bufs, "positioning bottom corners", 4, 0.30, cornersDone, HCorners.h, &c, &moves);
+    log("positioning bottom corners", .{});
+    const corner_sol = tables.corner_solution[c.getCornerCode()];
+    if (corner_sol.len < 255) {
+        log("-> found solution with {d} moves", .{corner_sol.len});
+        for (0..corner_sol.len) |k| try moves.append(c.step(corner_sol.moves[k]));
+    }
+    log("--------------------------------------------------", .{});
     try solveEndgame(&c, &moves);
 
     const t1 = std.time.nanoTimestamp();

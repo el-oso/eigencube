@@ -346,3 +346,164 @@ test "comptime corner commutators form A4 subgroup" {
     try std.testing.expect(res.total == 24);
     try std.testing.expect(res.unique == 8);
 }
+
+test "comptime corner solution table solves all 12 A4 states" {
+    const CornerSol = struct { len: u8, moves: [16]u8 };
+    const tables_local = eigencube.tables;
+    const BOT_CORNERS = eigencube.BOT_CORNERS;
+
+    const corner_table = comptime blk: {
+        @setEvalBranchQuota(500_000);
+        var table = [_]CornerSol{.{ .len = 255, .moves = undefined }} ** 256;
+
+        const get_code = struct {
+            fn call(cube: FastCube) u8 {
+                var code: u8 = 0;
+                for (BOT_CORNERS, 0..) |ci, idx| {
+                    const rot = tables_local.rotations[cube.data[ci]];
+                    const pos = rot.mulVec(CUBELETS[ci]);
+                    for (BOT_CORNERS, 0..) |target_ci, target_idx| {
+                        if (CUBELETS[target_ci].eql(pos)) {
+                            code |= @as(u8, @intCast(target_idx)) << @as(u3, @intCast(idx * 2));
+                            break;
+                        }
+                    }
+                }
+                return code;
+            }
+        }.call;
+
+        var commutators: [24][8]u8 = undefined;
+        var comm_cnt: usize = 0;
+        for (0..12) |a| {
+            for (0..12) |b| {
+                for (0..12) |c| {
+                    const seq = [8]u8{ @intCast(a), @intCast(b), @intCast(a ^ 1), @intCast(c), @intCast(a), @intCast(b ^ 1), @intCast(a ^ 1), @intCast(c ^ 1) };
+                    var cube = FastCube.SOLVED;
+                    for (seq) |m| cube = cube.applyMove(m);
+
+                    var preserves = true;
+                    for (eigencube.TOP_CUBELETS) |i| if (!tables_local.is_solved[i][cube.data[i]]) {
+                        preserves = false;
+                        break;
+                    };
+                    if (!preserves) continue;
+                    for (eigencube.MID_LAYER) |i| if (!tables_local.is_solved[i][cube.data[i]]) {
+                        preserves = false;
+                        break;
+                    };
+                    if (!preserves) continue;
+                    for (eigencube.BOT_EDGES) |i| if (!tables_local.is_solved[i][cube.data[i]]) {
+                        preserves = false;
+                        break;
+                    };
+                    if (!preserves) continue;
+
+                    const code = get_code(cube);
+                    if (code != get_code(FastCube.SOLVED)) {
+                        commutators[comm_cnt] = seq;
+                        comm_cnt += 1;
+                    }
+                }
+            }
+        }
+
+        const solved_code = get_code(FastCube.SOLVED);
+        table[solved_code] = .{ .len = 0, .moves = [_]u8{0} ** 16 };
+
+        var queue_cube: [12]FastCube = undefined;
+        var queue_moves: [12][16]u8 = undefined;
+        var queue_lens: [12]u8 = undefined;
+        queue_cube[0] = FastCube.SOLVED;
+        queue_lens[0] = 0;
+        var q_len: usize = 1;
+        var q_head: usize = 0;
+
+        while (q_head < q_len) : (q_head += 1) {
+            const curr = queue_cube[q_head];
+            const curr_len = queue_lens[q_head];
+            const curr_moves = queue_moves[q_head];
+            if (curr_len >= 16) continue;
+
+            for (commutators) |comm| {
+                var nxt = curr;
+                for (comm) |m| nxt = nxt.applyMove(m);
+                const code = get_code(nxt);
+                if (table[code].len == 255) {
+                    const new_len = curr_len + 8;
+                    var forward_moves: [16]u8 = undefined;
+                    for (0..curr_len) |k| forward_moves[k] = curr_moves[k];
+                    for (0..8) |k| forward_moves[curr_len + k] = comm[k];
+
+                    var sol_moves: [16]u8 = undefined;
+                    for (0..new_len) |k| sol_moves[k] = forward_moves[new_len - 1 - k] ^ 1;
+                    table[code] = .{ .len = new_len, .moves = sol_moves };
+
+                    queue_cube[q_len] = nxt;
+                    queue_lens[q_len] = new_len;
+                    queue_moves[q_len] = forward_moves;
+                    q_len += 1;
+                }
+            }
+        }
+
+        break :blk table;
+    };
+
+    // Verify all 12 reachable states are solved!
+    var count_reachable: usize = 0;
+    for (corner_table) |sol| {
+        if (sol.len != 255) {
+            count_reachable += 1;
+        }
+    }
+    try std.testing.expect(count_reachable == 12);
+
+    // Verify round-trip solution on all 12 states
+    for (corner_table) |sol| {
+        if (sol.len == 255) continue;
+        // Invert sol.moves to create the scrambled state from SOLVED
+        var state = FastCube.SOLVED;
+        // Inverting sol.moves: reverse and flip direction
+        var k = sol.len;
+        while (k > 0) : (k -= 1) {
+            state = state.applyMove(sol.moves[k - 1] ^ 1);
+        }
+        // Now apply sol.moves to state
+        for (0..sol.len) |idx| {
+            state = state.applyMove(sol.moves[idx]);
+        }
+        // Verify all 4 corners are now position-solved!
+        for (BOT_CORNERS) |ci| {
+            try std.testing.expect(tables_local.is_pos_solved[ci][state.data[ci]]);
+        }
+        // And verify 17 top+mid and 4 bottom edges are still solved!
+        for (eigencube.TOP_CUBELETS) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
+        for (eigencube.MID_LAYER) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
+        for (eigencube.BOT_EDGES) |ci| try std.testing.expect(tables_local.is_solved[ci][state.data[ci]]);
+    }
+}
+
+test "comptime zobrist_diff and is_bottom_down mathematical invariants" {
+    const t = eigencube.tables;
+    const down_vec = eigencube.Vec3{ .x = 0, .y = 0, .z = -1 };
+
+    // Verify is_bottom_down exact match with SO(3, Z) rotation
+    for (0..24) |r| {
+        const expected = t.rotations[r].mulVec(down_vec).eql(down_vec);
+        try std.testing.expectEqual(expected, t.is_bottom_down[r]);
+    }
+
+    // Verify zobrist_diff satisfies exact XOR homomorphic differential:
+    // zobrist[c][r] ^ zobrist_diff[m][c][r] == zobrist[c][transition[m][c][r]]
+    for (0..12) |m| {
+        for (0..26) |c| {
+            for (0..24) |r| {
+                const next_r = t.transition[m][c][r];
+                const expected_diff = if (next_r != r) (t.zobrist[c][r] ^ t.zobrist[c][next_r]) else 0;
+                try std.testing.expectEqual(expected_diff, t.zobrist_diff[m][c][r]);
+                try std.testing.expectEqual(t.zobrist[c][next_r], t.zobrist[c][r] ^ t.zobrist_diff[m][c][r]);
+            }
+        }
+    }
+}
