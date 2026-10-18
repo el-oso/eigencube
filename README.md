@@ -161,7 +161,7 @@ cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]
 # OCaml typed functional pearl (~3–8s):
 opam exec -- dune exec --root ocaml eigencube -- [seed]
 
-# Fast Julia port (~0.08s):
+# Fast Julia port (~0.08s, >13M moves/sec):
 julia --project=julia_fast -m Eigencube [seed]
 
 # Textbook linear algebra Julia port (~1s):
@@ -223,7 +223,7 @@ eigencube/
 ├── rust_pretty/            # Minimalistic Rust port (< 400 lines, textbook math)
 ├── rust_fast/              # Ultra-high-performance Rust solver (>10M moves/sec, Cayley L1)
 ├── julia_pretty/           # Julia port (< 400 lines, textbook math)
-├── julia_fast/             # Fast Julia solver (< 450 lines, same solutions as rust_fast)
+├── julia_fast/             # Fast Julia solver (< 450 lines, >13M moves/sec, same solutions as rust_fast)
 ├── scripts/
 │   └── generate_logo.py    # Logo, icons & GitHub social preview generator
 ├── tests/
@@ -253,7 +253,7 @@ Each port or companion implementation lives in its own top-level directory:
 - [`rust_pretty/`](rust_pretty/): A self-contained, high-performance port in Rust (< 400 lines) faithfully translating the textbook discrete linear algebra and on-demand memoized heuristics. Run solver via `cargo run --manifest-path rust_pretty/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_pretty/Cargo.toml --release`.
 - [`rust_fast/`](rust_fast/): A specialized ultra-high-performance companion in Rust (< 500 lines) exploiting the $SO(3, \mathbb{Z})$ finite rotation group (order 24), flat 26-byte states, L1-resident Cayley action tables, and precomputed heuristic lookups to achieve >10,000,000 moves/sec (~16x throughput speedup over `rust_pretty/`, solving scrambles in ~0.02s–0.03s). Run solver via `cargo run --manifest-path rust_fast/Cargo.toml --release -- [seed]` and tests via `cargo test --manifest-path rust_fast/Cargo.toml --release`.
 - [`julia_pretty/`](julia_pretty/): A port in Julia (< 400 lines) written as the textbook linear algebra: cubelets as `StaticArrays` vectors and rotation matrices, moves as callable Rodrigues rotations, memoized per-cubelet distances. It reproduces `rust_pretty/`'s search, so both find the same solution for the same seed. Requires Julia 1.12 or later. Install once via `julia --project=julia_pretty -e 'using Pkg; Pkg.instantiate()'`, run solver via `julia --project=julia_pretty -m EigencubePretty [seed]` and tests via `julia --project=julia_pretty -e 'using Pkg; Pkg.test()'`.
-- [`julia_fast/`](julia_fast/): A fast companion in Julia (< 450 lines) that keeps the matrix model in the hot path: each rotation is stored as one byte (the axes of its first two columns), so a state is 32 bytes, and every move decodes, multiplies and re-encodes the 26 rotations in loops the compiler vectorizes. Distances to solved are closed forms in the trace and diagonal of `R`. It reproduces `rust_fast/`'s search (random stream, priority encoding and tie-breaking), so both find the same solution for the same seed. Requires Julia 1.12 or later. Install once via `julia --project=julia_fast -e 'using Pkg; Pkg.instantiate()'`, run solver via `julia --project=julia_fast -m Eigencube [seed]` and tests via `julia --project=julia_fast -e 'using Pkg; Pkg.test()'`.
+- [`julia_fast/`](julia_fast/): A fast companion in Julia (< 450 lines) that keeps the matrix model in the hot path: each rotation is stored as one byte (the axes of its first two columns), so a state is 32 bytes, and every move decodes, multiplies and re-encodes the 26 rotations in loops the compiler vectorizes. Distances to solved are closed forms in the trace and diagonal of `R`. It simulates >13,000,000 moves/sec (~1.6x `rust_fast/`'s throughput on the same searches). It reproduces `rust_fast/`'s search (random stream, priority encoding and tie-breaking), so both find the same solution for the same seed. Requires Julia 1.12 or later. Install once via `julia --project=julia_fast -e 'using Pkg; Pkg.instantiate()'`, run solver via `julia --project=julia_fast -m Eigencube [seed]` and tests via `julia --project=julia_fast -e 'using Pkg; Pkg.test()'`.
 
 Each language port must be self-contained within its directory, faithfully preserve the discrete 3D linear algebra formulation and the $R \cdot \text{diag}(c) = \text{diag}(c)$ solved invariant, maintain zero external puzzle dependencies, and provide its own standalone test suite.
 
