@@ -40,7 +40,7 @@ end
 end
 
 @testitem "closed-form distances match breadth-first search" setup = [Group] begin
-    using Eigencube: CUBELETS, is_cubelet_solved, is_cubelet_positioned, distance_to_solved, distance_to_position, norm1
+    using Eigencube: CUBELETS, is_cubelet_solved, distance_to_solved
     function bfs_distance(goal, c, R0)
         dist = Dict(R => 0 for R in rotation_group() if goal(c, R))
         queue = collect(keys(dist))
@@ -51,7 +51,6 @@ end
     end
     for c in CUBELETS, R in rotation_group()
         @test distance_to_solved(c, R) == bfs_distance(is_cubelet_solved, c, R)
-        norm1(c) == 3 && @test distance_to_position(c, R) == bfs_distance(is_cubelet_positioned, c, R)
     end
 end
 
@@ -75,9 +74,23 @@ end
     end
 end
 
-@testitem "solution lengths match the rust_fast reference" begin
-    # Solution lengths printed by eigencube's rust_fast for seeds 1–5.
-    @test [length(solve(shuffle(100_000, s))) for s in 1:5] == [128, 150, 166, 146, 142]
+@testitem "solution lengths match the Zig reference" begin
+    # Solution lengths printed by eigencube's Zig port for seeds 1–5.
+    @test [length(solve(shuffle(100_000, s))) for s in 1:5] == [96, 114, 94, 84, 112]
+end
+
+@testitem "bottom-layer tables round-trip" begin
+    using Eigencube: EDGE_SOLUTIONS, CORNER_SOLUTIONS, EDGE_GENERATORS, CORNER_GENERATORS, BOTTOM_EDGES,
+        BOTTOM_CORNERS, TOP_AND_MIDDLE, codes_in, apply_moves, inverse, is_cubelet_solved, home, rotation
+    layer_solved(c, layer) = all(i -> is_cubelet_solved(home(i), rotation(c, i)), layer)
+    # Every generator keeps what the earlier phases solved.
+    @test all(g -> layer_solved(apply_moves(SOLVED, g), TOP_AND_MIDDLE), EDGE_GENERATORS)
+    @test all(g -> layer_solved(apply_moves(SOLVED, g), (TOP_AND_MIDDLE..., BOTTOM_EDGES...)), CORNER_GENERATORS)
+    @test (length(EDGE_SOLUTIONS), length(CORNER_SOLUTIONS)) == (192, 324)
+    # Undoing a tabulated solution from the solved cube reaches the arrangement it is filed under.
+    for (table, layer) in ((EDGE_SOLUTIONS, BOTTOM_EDGES), (CORNER_SOLUTIONS, BOTTOM_CORNERS)), (key, ms) in table
+        @test codes_in(apply_moves(SOLVED, reverse(map(inverse, ms))), layer) == key
+    end
 end
 
 @testitem "invalid input is rejected" begin
@@ -89,7 +102,7 @@ end
 end
 
 @testitem "hot kernels do not allocate" begin
-    using Eigencube: MOVES, Survey, TopAndMiddle, BottomCross, BottomCorners, heuristic, is_goal, apply_move
+    using Eigencube: MOVES, Survey, heuristic, is_goal, apply_move
     allocated(f, args...) = (f(args...); @allocated f(args...))
     c = shuffle(1000, 3)
     s = Survey(c)
@@ -97,8 +110,8 @@ end
     @test iszero(allocated(apply_move, c, 5))
     @test iszero(allocated(hash, c, zero(UInt)))
     @test iszero(allocated(Survey, c))
-    for phase in (TopAndMiddle(), BottomCross(), BottomCorners())
-        @test iszero(allocated(heuristic, phase, 3, s))
-        @test iszero(allocated(is_goal, phase, 3, s))
+    for step in (3, 12)
+        @test iszero(allocated(heuristic, step, s))
+        @test iszero(allocated(is_goal, step, s))
     end
 end
