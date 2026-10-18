@@ -176,36 +176,33 @@ const ALL, TOP, TOP_AND_MIDDLE = layer(_ -> true), layer(c -> c[3] == 1), layer(
 const TOP_EDGES, BOTTOM_EDGES = layer(c -> c[3] == 1 && norm1(c) == 2), layer(c -> c[3] == -1 && norm1(c) == 2)
 const BOTTOM_CORNERS = layer(c -> c[3] == -1 && norm1(c) == 3)
 
-count_in(flags::Lanes{Bool}, layer::Tuple) = count(i -> flags[i], layer)
 # The rotation codes of a layer's cubelets.
 codes_in(c::Cube, layer::Tuple) = map(i -> c.codes[i], layer)
 
 """
     Survey(cube)
 
-Every per-cubelet quantity the search reads, computed in one pass over the
-lanes: the cubelets that are solved, and each cubelet's quarter-turn distance
-to solved.
+Each cubelet's quarter-turn distance to solved, the one per-cubelet quantity
+the search reads: a cubelet is solved exactly when its distance is 0.
 """
 struct Survey
-    solved::Lanes{Bool}
     distance::Lanes{Int8}
 end
 
 function Survey(cube::Cube)
-    solved, d = MVector{NLANES, Bool}(undef), MVector{NLANES, Int8}(undef)
+    d = MVector{NLANES, Int8}(undef)
     for i in 1:NLANES
-        c, R = home(i), rotation(cube, i)
-        solved[i] = is_cubelet_solved(c, R)
-        d[i] = distance_to_solved(c, R)
+        d[i] = distance_to_solved(home(i), rotation(cube, i))
     end
-    return Survey(Tuple(solved), Tuple(d))
+    return Survey(Tuple(d))
 end
+
+count_solved(s::Survey, layer::Tuple) = count(i -> iszero(s.distance[i]), layer)
 
 # Σ √dᵢ over a layer, as a sequential Float32 sum in increasing cubelet order.
 sum_roots(s::Survey, layer::Tuple) = foldl((acc, i) -> acc + root(s.distance[i]), layer; init = 0.0f0)
 
-is_solved(cube::Cube) = count_in(Survey(cube).solved, ALL) == NCUBELETS
+is_solved(cube::Cube) = count_solved(Survey(cube), ALL) == NCUBELETS
 
 # -- Random stream (xorshift64, as in the reference) --------------------------
 
@@ -389,9 +386,9 @@ const STEPS, RANDOM_WEIGHT = 17, 0.25
 # Step `i` (from 0) ends with `i + 1` cubelets solved: the top edges first, then
 # the rest of the top layer, then the middle edges.
 is_goal(i::Int, s::Survey) =
-    count_in(s.solved, TOP_EDGES) >= min(4, i + 1) &&
-    count_in(s.solved, TOP) >= min(9, i + 1) &&
-    count_in(s.solved, TOP_AND_MIDDLE) >= min(17, i + 1)
+    count_solved(s, TOP_EDGES) >= min(4, i + 1) &&
+    count_solved(s, TOP) >= min(9, i + 1) &&
+    count_solved(s, TOP_AND_MIDDLE) >= min(17, i + 1)
 
 # (Σ √dᵢ)² / n over the top layer while it is unsolved, then over the top and
 # middle layers.

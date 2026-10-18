@@ -51,6 +51,8 @@ end
     end
     for c in CUBELETS, R in rotation_group()
         @test distance_to_solved(c, R) == bfs_distance(is_cubelet_solved, c, R)
+        # `Survey` counts solved cubelets as those at distance 0.
+        @test iszero(distance_to_solved(c, R)) == is_cubelet_solved(c, R)
     end
 end
 
