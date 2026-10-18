@@ -47,12 +47,20 @@ end
 
 @testitem "heuristics do not allocate" begin
     using EigencubePretty: top_layer_heuristic, middle_layer_heuristic, bottom_layer_edge_heuristic, bottom_layer_corner_heuristic
-    # Memoized distance lookups that box their arguments show up here.
     allocated(f, c) = (f(c); @allocated f(c))
     c = scramble(1000, 3)
     for h in (top_layer_heuristic, middle_layer_heuristic, bottom_layer_edge_heuristic, bottom_layer_corner_heuristic)
         @test iszero(allocated(h, c))
     end
+end
+
+@testitem "an A* attempt allocates nothing once its buffers are sized" begin
+    using EigencubePretty: Search, bounded_search!, heuristic, TopAndMiddleLayer, out_of_budget
+    # An unreachable goal, so the attempt runs its whole budget and builds no path.
+    s, c = Search(), scramble(100_000, 2)
+    attempt() = bounded_search!(s, c, Returns(false), x -> heuristic(TopAndMiddleLayer(), 3, x), () -> 1.0, 20_000)
+    @test attempt() === out_of_budget
+    @test iszero(@allocated attempt())
 end
 
 @testitem "heuristic norm is (Σ √d)²" begin

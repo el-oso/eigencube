@@ -13,10 +13,9 @@ xorshift64 stream, so the same scramble always yields the same solution.
 """
 module EigencubePretty
 
-using LinearAlgebra: Diagonal, ⋅
-using StaticArrays: SVector, SMatrix, @SMatrix, deleteat
+using LinearAlgebra: Diagonal, dot, ⋅
 using DataStructures: BinaryMinHeap
-using Memoization: @memoize
+using StaticArrays: SVector, SMatrix, @SMatrix
 using Random: Random, AbstractRNG
 using PrecompileTools: @compile_workload
 
@@ -39,31 +38,58 @@ The cubelet whose solved position is `home`, turned by `rotation`.
 struct Cubelet
     home::Vec3
     rotation::Mat3
+    position::Vec3  # `rotation * home`
+    key::Int  # `home`, then `rotation` by rows, as base-3 digits; see `base3`
+    Cubelet(home, rotation) = new(home, rotation, rotation * home, 3^9 * base3(home) + base3(rotation'))
 end
 
-position(c::Cubelet) = c.rotation * c.home
-is_solved(c::Cubelet) = c.rotation * Diagonal(c.home) == Diagonal(c.home)
+# Entries in {-1, 0, 1} as the digits `x + 1` of a base-3 number. For digit
+# sequences of one length, the numbers order like the sequences, so a cubelet's
+# `key` orders it by home vector, then by rotation row by row, and cubelets
+# compare and hash by it.
+base3(xs) = foldl((acc, x) -> 3acc + (x + 1), xs; init = 0)
+
+Base.:(==)(a::Cubelet, b::Cubelet) = a.key == b.key
+Base.hash(c::Cubelet, h::UInt) = hash(c.key, h)
+Base.isless(a::Cubelet, b::Cubelet) = isless(a.key, b.key)
+
+position(c::Cubelet) = c.position
+# `R * Diagonal(c) == Diagonal(c)`: for a rotation, column k is eₖ exactly when `R[k, k] == 1`.
+is_solved(c::Cubelet) = all(k -> iszero(c.home[k]) || c.rotation[k, k] == 1, 1:3)
 
 """
     Cube
 
-The 26 visible cubelets; the hidden center at the origin is omitted.
+The 26 visible cubelets; the hidden center at the origin is omitted. A cube
+stores each cubelet as its index in [`all_cubelets`](@ref), the cubelets that
+moves can produce, so turning a cube or storing one allocates no matrices.
+`indices` is a `Vector` for a cube on its own, and a column of the search's
+state arena for a cube the search reached.
 """
-struct Cube
-    cubelets::SVector{26, Cubelet}
+struct Cube{V <: AbstractVector{Int16}}
+    indices::V
 end
 
-Base.iterate(cube::Cube, state...) = iterate(cube.cubelets, state...)
+Base.:(==)(a::Cube, b::Cube) = a.indices == b.indices
+Base.hash(c::Cube, h::UInt) = foldl((h, i) -> hash(i, h), c.indices; init = h)
+# Cubelet by cubelet: `all_cubelets` is sorted, so indices order like cubelets.
+Base.isless(a::Cube, b::Cube) = isless(a.indices, b.indices)
+
+function Base.iterate(cube::Cube, state...)
+    next = iterate(cube.indices, state...)
+    isnothing(next) && return nothing
+    i, state = next
+    return all_cubelets[i], state
+end
 Base.length(::Cube) = 26
-Base.eltype(::Type{Cube}) = Cubelet
+Base.eltype(::Type{<:Cube}) = Cubelet
 
 is_solved(cube::Cube) = all(is_solved, cube)
 
 # x, y, z each range over {-1, 0, 1}, with x varying slowest.
-const vectors = SVector{27}(vec([Vec3(x, y, z) for z in -1:1, y in -1:1, x in -1:1]))
-const unit_vectors = SVector{6}(filter(v -> norm1(v) == 1, vectors))
-
-const solved_cube = Cube(map(v -> Cubelet(v, identity3), deleteat(vectors, 14)))  # vectors[14] is the origin
+const vectors = vec([Vec3(x, y, z) for z in -1:1, y in -1:1, x in -1:1])
+const unit_vectors = filter(v -> norm1(v) == 1, vectors)
+const homes = deleteat!(copy(vectors), 14)  # vectors[14] is the origin
 
 # -- Moves ------------------------------------------------------------------------
 
@@ -73,15 +99,19 @@ const solved_cube = Cube(map(v -> Cubelet(v, identity3), deleteat(vectors, 14)))
 A quarter turn of the slice `normal` points at, clockwise (`dir = 1`) or
 counterclockwise (`dir = -1`) as seen looking at that face. A move is applied by
 calling it: `move(cube)`, `move(cubelet)`, or `move(R)` for a lone rotation.
+The search applies `moves[k]` through the table `turns`.
 """
 struct Move
     normal::Vec3
     dir::Int8
 end
 
+Base.:(==)(a::Move, b::Move) = a.normal == b.normal && a.dir == b.dir
+Base.hash(m::Move, h::UInt) = hash(m.dir, hash(base3(m.normal), h))
+
 # Sorted by (normal, dir): a move's index in `moves` is its rank in the search's
 # tie-breaking order.
-const moves = SVector{12}([Move(v, d) for v in unit_vectors for d in (-1, 1)])
+const moves = [Move(v, d) for v in unit_vectors for d in (-1, 1)]
 
 inverse(move::Move) = Move(move.normal, -move.dir)
 
@@ -100,7 +130,30 @@ is_in_slice(move::Move, c::Cubelet) = move.normal ⋅ position(c) > 0
 
 (move::Move)(R::Mat3) = rotation_matrix(move) * R
 (move::Move)(c::Cubelet) = is_in_slice(move, c) ? Cubelet(c.home, move(c.rotation)) : c
-(move::Move)(cube::Cube) = Cube(map(move, cube.cubelets))
+
+# The 24 rotations of the cube, reached from the identity by quarter turns.
+const rotations = let rots = [identity3]
+    for R in rots, move in moves  # `rots` grows while it is iterated
+        move(R) in rots || push!(rots, move(R))
+    end
+    rots
+end
+
+"""
+    all_cubelets
+
+Every cubelet that moves can produce, 26 homes × 24 rotations, sorted.
+"""
+const all_cubelets = sort!([Cubelet(home, R) for home in homes for R in rotations])
+const cubelet_index = Dict(c => Int16(i) for (i, c) in pairs(all_cubelets))
+
+# `turns[k, i]` is the index of `moves[k](all_cubelets[i])`.
+const turns = [cubelet_index[move(c)] for move in moves, c in all_cubelets]
+const inverse_index = [findfirst(==(inverse(move)), moves) for move in moves]
+
+(move::Move)(cube::Cube) = Cube(turns[findfirst(==(move), moves), cube.indices])
+
+const solved_cube = Cube([cubelet_index[Cubelet(home, identity3)] for home in homes])
 
 apply_moves(state, ms) = foldl((s, move) -> move(s), ms; init = state)
 
@@ -142,12 +195,6 @@ end
 
 # -- A* with move-budgeted restarts ------------------------------------------------
 
-# Total order on states: a matrix by rows; a cube cubelet by cubelet, home
-# vector first.
-order_key(R::Mat3) = vec(R')
-order_key(c::Cubelet) = vcat(c.home, order_key(c.rotation))
-order_key(cube::Cube) = map(order_key, cube.cubelets)
-
 """
     Node(priority, cost, move, state)
 
@@ -166,7 +213,7 @@ function Base.isless(a::Node, b::Node)
     a.priority != b.priority && return a.priority < b.priority
     a.cost != b.cost && return a.cost > b.cost
     a.move != b.move && return a.move > b.move
-    return order_key(b.state) < order_key(a.state)
+    return b.state < a.state
 end
 
 # Never undo the previous move; of two commuting opposite-face moves, keep one
@@ -195,15 +242,13 @@ same random stream, on a budget 1.5 times larger.
 Returns `(goal_state, path)`, where `path` is a `Vector{Move}`, or `nothing` if
 the frontier empties, or the budget runs out with a zero `random_weight`.
 """
-function astar(start::S, is_goal, heuristic = Returns(0.0); random_weight = 0.0, max_moves = 100_000) where {S}
+function astar(start::Cube, is_goal, heuristic = Returns(0.0); random_weight = 0.0, max_moves = 100_000)
     is_goal(start) && return (start, Move[])
     rng = Xorshift64(42)
     weight() = random_weight > 0 ? max(gaussian(rng, 1.0, random_weight), 0.01) : 1.0
-    # state => how it was first reached at its lowest cost; restarts reuse its capacity
-    visited = Dict{S, @NamedTuple{cost::Int, move::Int}}()
     budget = max_moves
     while true
-        result = bounded_search!(visited, start, is_goal, heuristic, weight, budget)
+        result = bounded_search!(search, start, is_goal, heuristic, weight, budget)
         result === out_of_budget || return result
         random_weight > 0 || return nothing
         budget = max(budget + 1, floor(Int, 1.5 * budget))
@@ -215,23 +260,71 @@ struct OutOfBudget end
 const out_of_budget = OutOfBudget()
 const unvisited = (cost = typemax(Int), move = 0)
 
-# One A* attempt that generates at most `budget` successor states, recording
-# reached states in `visited`. Returns `(goal_state, path)`, `nothing` if the
-# frontier empties, or `out_of_budget`.
-function bounded_search!(visited, start, is_goal, heuristic, weight, budget)
-    empty!(visited)
+# A cube held in a column of the search's state arena.
+const ArenaCube = Cube{SubArray{Int16, 1, Matrix{Int16}, Tuple{Base.Slice{Base.OneTo{Int}}, Int}, true}}
+arena_cube(arena::Matrix{Int16}, column::Int) = Cube(view(arena, :, column))
+
+"""
+    Search()
+
+The buffers of an A* attempt, sized once per attempt so that the search itself
+allocates nothing. Each reached state is a column of `arena`: a successor is
+written into the next free column, which is kept only if the state is new or
+reached more cheaply. The last two columns are scratch for `path_to`.
+"""
+mutable struct Search
+    arena::Matrix{Int16}
+    # state => how it was first reached at its lowest cost
+    visited::Dict{ArenaCube, @NamedTuple{cost::Int, move::Int}}
+    frontier::BinaryMinHeap{Node{ArenaCube}}
+end
+Search() = Search(Matrix{Int16}(undef, 26, 0), Dict{ArenaCube, @NamedTuple{cost::Int, move::Int}}(), BinaryMinHeap{Node{ArenaCube}}())
+
+# Every search shares these buffers, so solves must not run concurrently.
+const search = Search()
+
+# Empty the buffers for an attempt with `budget` successors, and put `start` in
+# the first column. An attempt keeps at most `budget + 1` states.
+# The buffers only grow: `sizehint!` to a smaller size shrinks them, and the
+# next larger budget would reallocate them.
+function restart!(s::Search, start::Cube, budget::Int)
+    empty!(s.visited)
+    empty!(s.frontier)
+    if size(s.arena, 2) < budget + 3
+        s.arena = Matrix{Int16}(undef, 26, budget + 3)
+        sizehint!(s.visited, budget + 1)
+        sizehint!(s.frontier, budget + 1)
+    end
+    s.arena[:, 1] = start.indices
+    return arena_cube(s.arena, 1)
+end
+
+# `moves[k]` applied to `cube`, written into column `column` of `arena`.
+function turn!(arena::Matrix{Int16}, column::Int, k::Int, cube::Cube)
+    for (i, j) in pairs(cube.indices)
+        arena[i, column] = turns[k, j]
+    end
+    return arena_cube(arena, column)
+end
+
+# One A* attempt that generates at most `budget` successor states. Returns
+# `(goal_state, path)`, `nothing` if the frontier empties, or `out_of_budget`.
+function bounded_search!(s::Search, start::Cube, is_goal, heuristic, weight, budget)
+    start = restart!(s, start, budget)
+    visited, frontier, arena = s.visited, s.frontier, s.arena
     visited[start] = (cost = 0, move = 0)
-    frontier = BinaryMinHeap([Node(0.0, 0, 0, start)])
-    simulated = 0
+    push!(frontier, Node(0.0, 0, 0, start))
+    simulated, free = 0, 2
     while !isempty(frontier)
         node = pop!(frontier)
         node.cost > visited[node.state].cost && continue
         for (k, move) in Iterators.take(successors(node.move), budget - simulated)
             simulated += 1
-            state, cost = move(node.state), node.cost + 1
+            state, cost = turn!(arena, free, k, node.state), node.cost + 1
             get(visited, state, unvisited).cost <= cost && continue
             visited[state] = (; cost, move = k)
-            is_goal(state) && return (state, path_to(visited, state))
+            free += 1
+            is_goal(state) && return (Cube(copy(state.indices)), path_to(s, state))
             push!(frontier, Node(cost + weight() * heuristic(state), cost, k, state))
         end
         simulated == budget && return out_of_budget
@@ -239,20 +332,22 @@ function bounded_search!(visited, start, is_goal, heuristic, weight, budget)
     return nothing
 end
 
-# The moves from the search's start to `state`, found by undoing each state's last move.
-function path_to(visited, state)
-    k = visited[state].move
-    iszero(k) && return Move[]
-    return [path_to(visited, inverse(moves[k])(state)); moves[k]]
+# The moves from the search's start to `state`, found by undoing each state's
+# last move, in the two scratch columns.
+function path_to(s::Search, state::Cube)
+    path, scratch = Move[], size(s.arena, 2) - 1
+    while !iszero(s.visited[state].move)
+        k = s.visited[state].move
+        push!(path, moves[k])
+        state = turn!(s.arena, scratch + isodd(length(path)), inverse_index[k], state)
+    end
+    return reverse!(path)
 end
 
 # -- Heuristics -------------------------------------------------------------------
 
 # Fewest moves that bring a lone rotation to a goal: a breadth-first search,
-# one layer of rotations per move. Memoized below: a cubelet has only 24
-# distinct rotations. This must not call `astar`: `astar` reaches these
-# distances through its heuristic, and that recursion keeps inference from
-# compiling the memoized lookup without boxing its arguments.
+# one layer of rotations per move. Tabulated below for every cubelet.
 function fewest_moves(is_goal, rotation)
     layer, seen, depth = [rotation], Set([rotation]), 0
     while !any(is_goal, layer)
@@ -263,11 +358,10 @@ function fewest_moves(is_goal, rotation)
     return depth
 end
 
-# Memoization keys a call by its (positional, keyword) argument tuples; a cache
-# typed for that key avoids boxing every lookup.
-const DistanceCache = Dict{Tuple{Tuple{Cubelet}, Tuple{}}, Int}
-@memoize DistanceCache min_moves_to_solved(c::Cubelet) = fewest_moves(R -> is_solved(Cubelet(c.home, R)), c.rotation)
-@memoize DistanceCache min_moves_to_position(c::Cubelet) = fewest_moves(R -> R * c.home == c.home, c.rotation)
+const moves_to_solved = Dict(c => fewest_moves(R -> is_solved(Cubelet(c.home, R)), c.rotation) for c in all_cubelets)
+const moves_to_position = Dict(c => fewest_moves(R -> R * c.home == c.home, c.rotation) for c in all_cubelets)
+min_moves_to_solved(c::Cubelet) = moves_to_solved[c]
+min_moves_to_position(c::Cubelet) = moves_to_position[c]
 
 # The p-norm with p = 1/2 of the distances `f(c)` over the cubelets selected by
 # `criterion(c)`: (Σ dᵢ^p)^(1/p) = (Σ √dᵢ)². Written with `sqrt` and a square
@@ -302,7 +396,8 @@ bottom_layer_corner_heuristic(cube) =
 num_solved(cube, criterion) = count(c -> criterion(c) && is_solved(c), cube)
 
 const down = Vec3(0, 0, -1)
-has_yellow_bottom(c::Cubelet) = c.rotation * down == down
+# For a rotation `R` and a unit vector `v`, `R v == v` exactly when `v ⋅ (R v) == 1`.
+has_yellow_bottom(c::Cubelet) = dot(down, c.rotation, down) == 1
 is_in_right_place(c::Cubelet) = position(c) == c.home
 num_bottom_edges_positioned(cube) = count(c -> is_bottom_edge(c) && has_yellow_bottom(c), cube)
 num_bottom_corners_positioned(cube) = count(c -> is_bottom_corner(c) && is_in_right_place(c), cube)
@@ -356,7 +451,7 @@ end
 const left, top, bottom = Move(Vec3(0, -1, 0), 1), Move(Vec3(0, 0, 1), 1), Move(Vec3(0, 0, -1), 1)
 
 # (L' U' L U)² twists the front-left-bottom corner in place.
-const twist = SVector(inverse(left), inverse(top), left, top, inverse(left), inverse(top), left, top)
+const twist = [inverse(left), inverse(top), left, top, inverse(left), inverse(top), left, top]
 twists(n) = collect(Iterators.flatten(Iterators.repeated(twist, n)))
 
 bottom_left_front_corner(cube) = first(c for c in cube if position(c) == Vec3(1, -1, -1))
