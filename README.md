@@ -123,6 +123,22 @@ docker run --rm eigencube python eigencube.py 123
 The image uses Pygame's headless video driver. The interactive GUI is better
 run from the virtual environment because it requires access to the host display.
 
+Each Julia port has its own Dockerfile, which installs and precompiles the port
+and its test environment at build time:
+
+```bash
+# Build the image
+docker build -t eigencube-julia-fast julia_fast
+
+# Run the port's test suite (the image's default command)
+docker run --rm eigencube-julia-fast
+
+# Run the solver with a specific seed
+docker run --rm eigencube-julia-fast julia --project=. -m Eigencube 123
+```
+
+`julia_pretty` works the same way, with `-m EigencubePretty`.
+
 ---
 
 ## Usage
